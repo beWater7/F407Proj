@@ -1,0 +1,82 @@
+﻿==> STM32F407xx selected
+arm-none-eabi-gcc -Wall -Os -ffunction-sections -fdata-sections -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -DUSE_STDPERIPH_DRIVER -DSTM32F40_41xxx  -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/inc -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Include -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Device/ST/STM32F4xx/Include -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/inc -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/spiFlash -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/internalFlash -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/usart -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/SRAM -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/led -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/timer -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/shell -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/ymodem -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app -c /e/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c -o /e/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.o
+make : In file included from E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/common.h:16,
+所在位置 C:\Users\17814\AppData\Local\Temp\ps-script-0be37866-c565-485e-b82b-cb4b724f2eb9.ps1:83 字符: 200
++ ... n "E:\4project\stm32f407\f407-boot\bootloader"; make -j4 2>&1 | Out-F ...
++                                                     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (In file include...de/common.h:16,:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+                 from E:/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c:2:
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:65:1: warning: multi-line comment [-Wcomment]
+   65 | //#define __PLOOC_VA_NUM_ARGS(...)                                                \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:75:1: warning: multi-line comment [-Wcomment]
+   75 | //#define __PLOOC_VA_NUM_ARGS(...)                                                \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:107:1: warning: multi-line comment [-Wcomment]
+  107 | //#define __BOOTLOADER_DEBUG_2(flag, format, ...) do{   \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:116:1: warning: multi-line comment [-Wcomment]
+  116 | //#define __BOOTLOADER_DEBUG_1(flag, format, ...) do{   \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:141:1: warning: multi-line comment [-Wcomment]
+  141 | //#define BOOTLOADER_DEBUG(...) do{                          \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:147:1: warning: multi-line comment [-Wcomment]
+  147 | //#define BOOTLOADER_DEBUG(...) \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:170:1: warning: multi-line comment [-Wcomment]
+  170 | //#define BOOTLOADER_DEBUG(num, ...)  do{ \
+      | ^
+In file included from E:/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c:3:
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:142:9: warning: 'HW_READ' redefined
+  142 | #define HW_READ(a, b, c)                         \
+      |         ^~~~~~~
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:137:9: note: this is the location of the previous 
+definition
+  137 | #define HW_READ(a, b, c)    (self->stPartOps.hw_ops->hw_read(a, b, c))
+      |         ^~~~~~~
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:150:9: warning: 'HW_WRITE' redefined
+  150 | #define HW_WRITE(a, b, c)                        \
+      |         ^~~~~~~~
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:138:9: note: this is the location of the previous 
+definition
+  138 | #define HW_WRITE(a, b, c)   (self->stPartOps.hw_ops->hw_write(a, b, c))
+      |         ^~~~~~~~
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:158:9: warning: 'HW_ERASE' redefined
+  158 | #define HW_ERASE(a)                              \
+      |         ^~~~~~~~
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/flash_manage.h:139:9: note: this is the location of the previous 
+definition
+  139 | #define HW_ERASE(a)         (self->stPartOps.hw_ops->hw_erase(a))
+      |         ^~~~~~~~
+In file included from E:/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c:4:
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:65:1: warning: multi-line comment [-Wcomment]
+   65 | //#define __PLOOC_VA_NUM_ARGS(...)                                                \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:75:1: warning: multi-line comment [-Wcomment]
+   75 | //#define __PLOOC_VA_NUM_ARGS(...)                                                \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:107:1: warning: multi-line comment [-Wcomment]
+  107 | //#define __BOOTLOADER_DEBUG_2(flag, format, ...) do{   \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:116:1: warning: multi-line comment [-Wcomment]
+  116 | //#define __BOOTLOADER_DEBUG_1(flag, format, ...) do{   \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:141:1: warning: multi-line comment [-Wcomment]
+  141 | //#define BOOTLOADER_DEBUG(...) do{                          \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:147:1: warning: multi-line comment [-Wcomment]
+  147 | //#define BOOTLOADER_DEBUG(...) \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade/iap.h:170:1: warning: multi-line comment [-Wcomment]
+  170 | //#define BOOTLOADER_DEBUG(num, ...)  do{ \
+      | ^
+E:/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c: In function 'history_redraw_line':
+E:/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.c:281:9: warning: unused variable 'buf_num' [-Wunused
+-variable]
+  281 |     int buf_num = strlen(buf);
+      |         ^~~~~~~
+arm-none-eabi-gcc -Wall -Os -ffunction-sections -fdata-sections -mcpu=cortex-m4 -mthumb -mfpu=fpv4-sp-d16 -mfloat-abi=softfp -DUSE_STDPERIPH_DRIVER -DSTM32F40_41xxx  -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/inc -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Include -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Device/ST/STM32F4xx/Include -I /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/inc -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/spiFlash -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/internalFlash -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/usart -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/SRAM -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/led -I /e/4project/stm32f407/f407-boot/bootloader/User/h/bsp/timer -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/upgrade -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/shell -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app/ymodem -I /e/4project/stm32f407/f407-boot/bootloader/User/h/app /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/startup_stm32f40xx.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Device/ST/STM32F4xx/Source/Templates/gcc/reset_handler.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/CMSIS/Device/ST/STM32F4xx/Source/Templates/system_stm32f4xx.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/misc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_adc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_can.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_cec.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_crc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_cryp.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_cryp_aes.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_cryp_des.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_cryp_tdes.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dac.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dbgmcu.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dcmi.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dfsdm.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dma.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_dsi.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_exti.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_flash.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_flash_ramfunc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_fmpi2c.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_fsmc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_gpio.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_hash.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_hash_md5.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_hash_sha1.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_i2c.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_iwdg.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_lptim.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_pwr.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_qspi.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rcc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rng.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_rtc.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_sai.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_sdio.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_spdifrx.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_spi.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_syscfg.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_tim.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_usart.o /e/4project/stm32f407/f407-boot/bootloader/Libraries/STM32F4xx_StdPeriph_Driver/src/stm32f4xx_wwdg.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/spiFlash/bsp_spi_flash.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/internalFlash/bsp_internalFlash.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/usart/bsp_debug_usart.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/SRAM/bsp_sram.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/led/bsp_led.o /e/4project/stm32f407/f407-boot/bootloader/User/bsp/timer/bsp_timer.o /e/4project/stm32f407/f407-boot/bootloader/User/app/crc.o /e/4project/stm32f407/f407-boot/bootloader/User/app/dev_manage.o /e/4project/stm32f407/f407-boot/bootloader/User/app/flash_manage.o /e/4project/stm32f407/f407-boot/bootloader/User/app/main.o /e/4project/stm32f407/f407-boot/bootloader/User/app/os_debug.o /e/4project/stm32f407/f407-boot/bootloader/User/app/shell/cmd_src.o /e/4project/stm32f407/f407-boot/bootloader/User/app/stm32f4xx_it.o /e/4project/stm32f407/f407-boot/bootloader/User/app/syscalls.o /e/4project/stm32f407/f407-boot/bootloader/User/app/upgrade/common.o /e/4project/stm32f407/f407-boot/bootloader/User/app/upgrade/download.o /e/4project/stm32f407/f407-boot/bootloader/User/app/upgrade/iap.o /e/4project/stm32f407/f407-boot/bootloader/User/app/upgrade/tasklib.o /e/4project/stm32f407/f407-boot/bootloader/User/app/ymodem/ymodem.o -T link.ld -Wl,--gc-sections -Wl,-Map=build/loader.map --specs=nano.specs -o build/loader.elf
+arm-none-eabi-objcopy -O binary build/loader.elf build/loader.bin

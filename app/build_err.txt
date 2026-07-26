@@ -1,0 +1,153 @@
+﻿==> STM32F407xx selected
+CC  /e/4project/stm32f407/f407-boot/app/User/bsp/timer/bsp_timer.c
+CC  /e/4project/stm32f407/f407-boot/app/User/app/main.c
+make : In file included from E:/4project/stm32f407/f407-boot/app/User/app/main.c:8:
+所在位置 C:\Users\17814\AppData\Local\Temp\ps-script-8a5a6692-096b-4b18-a68c-cfc697a3eb7f.ps1:85 字符: 121
++ ... Location 'E:\4project\stm32f407\f407-boot\app'; make -j8 2>&1 | Out-F ...
++                                                     ~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (In file include...r/app/main.c:8::String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+E:/4project/stm32f407/f407-boot/app/User/h/bsp/internalFlash/bsp_internalFlash.h:28:9: warning: 'FLASH_DEBUG' redefined
+   28 | #define FLASH_DEBUG(format, ...) do{\
+      |         ^~~~~~~~~~~
+In file included from E:/4project/stm32f407/f407-boot/app/User/app/main.c:7:
+E:/4project/stm32f407/f407-boot/app/User/h/bsp/spiFlash/bsp_spi_flash.h:82:9: note: this is the location of the previou
+s definition
+   82 | #define FLASH_DEBUG(fmt,arg...)          do{\
+      |         ^~~~~~~~~~~
+In file included from E:/4project/stm32f407/f407-boot/app/User/h/app/flashMng/flash_manage.h:17,
+                 from E:/4project/stm32f407/f407-boot/app/User/app/main.c:29:
+E:/4project/stm32f407/f407-boot/app/User/h/app/osHal/typedef.h:75:9: warning: 'INT8_MIN' redefined
+   75 | #define INT8_MIN   (-128)
+      |         ^~~~~~~~
+In file included from E:/ARM_GCC/arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi/lib/gcc/arm-none-eabi/15.2.1/
+include/stdint.h:11,
+                 from E:/4project/stm32f407/f407-boot/app/Libraries/CMSIS/Include/core_cm4.h:187,
+                 from E:/4project/stm32f407/f407-boot/app/Libraries/CMSIS/Device/ST/STM32F4xx/Include/stm32f4xx.h:817,
+                 from E:/4project/stm32f407/f407-boot/app/User/app/main.c:1:
+E:/ARM_GCC/arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi/arm-none-eabi/include/stdint.h:152:9: note: this is
+ the location of the previous definition
+  152 | #define INT8_MIN (-__INT8_MAX__ - 1)
+      |         ^~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/h/app/osHal/typedef.h:81:9: warning: 'offsetof' redefined
+   81 | #define offsetof(type, member) ((size_t)&(((type *)0)->member))
+      |         ^~~~~~~~
+In file included from E:/ARM_GCC/arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi/arm-none-eabi/include/string.
+h:17,
+                 from E:/4project/stm32f407/f407-boot/app/lwip-2.1.2/src/include/lwip/sockets.h:52,
+                 from E:/4project/stm32f407/f407-boot/app/User/app/main.c:21:
+E:/ARM_GCC/arm-gnu-toolchain-15.2.rel1-mingw-w64-i686-arm-none-eabi/lib/gcc/arm-none-eabi/15.2.1/include/stddef.h:431:9
+: note: this is the location of the previous definition
+  431 | #define offsetof(TYPE, MEMBER) __builtin_offsetof (TYPE, MEMBER)
+      |         ^~~~~~~~
+In file included from E:/4project/stm32f407/f407-boot/app/User/h/app/flashMng/flash_manage.h:18:
+E:/4project/stm32f407/f407-boot/app/User/h/app/osHal/os_mutex.h:52:1: warning: multi-line comment [-Wcomment]
+   52 | // #define os_mutex_del(p)                                 \
+      | ^
+E:/4project/stm32f407/f407-boot/app/User/h/app/flashMng/flash_manage.h:210:9: warning: 'STOR_INFO' redefined
+  210 | #define STOR_INFO(format, ...)
+      |         ^~~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/h/app/flashMng/flash_manage.h:199:9: note: this is the location of the previou
+s definition
+  199 | #define STOR_INFO    KERN_INFO STOR_PREFIX
+      |         ^~~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c: In function 'test_task':
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:431:13: warning: unused variable 'flag' [-Wunused-variable]
+  431 |     uint8_t flag = 1;
+      |             ^~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c: In function 'hard_fault_handler_c':
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:557:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  557 |     printf("R0 : 0x%08X\n", r0);
+      |                    ~~~^     ~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:558:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  558 |     printf("R1 : 0x%08X\n", r1);
+      |                    ~~~^     ~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:559:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  559 |     printf("R2 : 0x%08X\n", r2);
+      |                    ~~~^     ~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:560:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  560 |     printf("R3 : 0x%08X\n", r3);
+      |                    ~~~^     ~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:561:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  561 |     printf("R12: 0x%08X\n", r12);
+      |                    ~~~^     ~~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:562:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  562 |     printf("LR : 0x%08X (return address)\n", lr);
+      |                    ~~~^                      ~~
+      |                       |                      |
+      |                       unsigned int           uint32_t {aka long unsigned int}
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:563:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  563 |     printf("PC : 0x%08X (fault address)\n", pc);
+      |                    ~~~^                     ~~
+      |                       |                     |
+      |                       unsigned int          uint32_t {aka long unsigned int}
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:564:23: warning: format '%X' expects argument of type 'unsigned int
+', but argument 2 has type 'uint32_t' {aka 'long unsigned int'} [-Wformat=]
+  564 |     printf("PSR: 0x%08X\n", psr);
+      |                    ~~~^     ~~~
+      |                       |     |
+      |                       |     uint32_t {aka long unsigned int}
+      |                       unsigned int
+      |                    %08lX
+E:/4project/stm32f407/f407-boot/app/User/app/main.c: In function 'getBuildDate':
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:739:17: warning: unused variable 'monthStr' [-Wunused-variable]
+  739 |     const char *monthStr = NULL;
+      |                 ^~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c: In function 'main':
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:981:36: warning: format '%x' expects argument of type 'unsigned int
+', but argument 2 has type 'long unsigned int' [-Wformat=]
+  981 |     printf("APP running! addr=0x%08x\r\n", (uint32_t)&main);
+      |                                 ~~~^       ~~~~~~~~~~~~~~~
+      |                                    |       |
+      |                                    |       long unsigned int
+      |                                    unsigned int
+      |                                 %08lx
+E:/4project/stm32f407/f407-boot/app/User/app/main.c: At top level:
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:806:13: warning: 'mqtt_data_send_task' defined but not used [-Wunus
+ed-function]
+  806 | static void mqtt_data_send_task(void* parameter)
+      |             ^~~~~~~~~~~~~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:522:13: warning: 'sysInfo_task' defined but not used [-Wunused-func
+tion]
+  522 | static void sysInfo_task(void *arg)
+      |             ^~~~~~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:429:13: warning: 'test_task' defined but not used [-Wunused-functio
+n]
+  429 | static void test_task(void *arg)
+      |             ^~~~~~~~~
+E:/4project/stm32f407/f407-boot/app/User/app/main.c:376:13: warning: 'shell_task' defined but not used [-Wunused-functi
+on]
+  376 | static void shell_task(void *arg)
+      |             ^~~~~~~~~~
+LD  build/app.elf
+BIN build/app.bin

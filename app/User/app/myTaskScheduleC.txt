@@ -1,0 +1,128 @@
+#include "stm32f4xx.h"
+#include "malloc.h"
+#include "myTaskSchedule.h"
+
+__EXRAM Task taskList[MAX_TASKS];
+uint8_t taskCount = 0;
+int8_t currentTask = -1;
+
+void taskReturnHandler(int returnValue) {
+    taskList[currentTask].returnValue = returnValue;
+    taskList[currentTask].state = TASK_FINISHED;
+    SysTick_Handler();
+}
+
+
+void initTaskStack(Task *task, void (*taskFunction)(void *), void *param) {
+#if 0
+    uint32_t *stack = task->stack + STACK_SIZE - 1;
+
+    stack--; // xPSR
+    *stack = 0x01000000; // xPSR (Thumb bit set)
+
+    stack--; // PC
+    *stack = (uint32_t)taskFunction; // PC (任务入口地址)
+
+    stack--; // LR
+    *stack = (uint32_t)taskReturnHandler; // 返回地址设置为任务结束处理函数
+
+    stack -= 5; // R12, R3, R2, R1
+    *stack = (uint32_t)param; // R0 (任务参数)
+
+    stack -= 8; // R11, R10, R9, R8, R7, R6, R5, R4
+#endif
+	  uint32_t *stack = task->stack + STACK_SIZE - 16; // 留出空间
+
+    // 初始化栈帧
+    stack[15] = 0x01000000; // xPSR
+    stack[14] = (uint32_t)taskFunction; // PC
+    stack[13] = (uint32_t)taskReturnHandler; // LR
+    stack[12] = 0x14141414; // R12
+    stack[11] = 0x03030303; // R3
+    stack[10] = 0x02020202; // R2
+    stack[ 9] = 0x01010101; // R1
+    stack[ 8] = (uint32_t)param; // R0
+
+    // 初始化其他寄存器
+    for (int i = 7; i >= 0; i--) {
+        stack[i] = 0x0; // R7-R0
+    }
+	
+    task->stackPointer = stack;
+    task->taskFunction = taskFunction;
+    task->param = param;
+    task->state = TASK_READY;
+
+	printf("Task 11111111. Task count: %d\n", taskCount);
+}
+
+void addTask(void (*taskFunction)(void *), void *param) {
+    if (taskCount < MAX_TASKS) {
+        initTaskStack(&taskList[taskCount], taskFunction, param);
+        taskCount++;
+		// 璋冭瘯鎵撳嵃
+        printf("Task added. Task count: %d\n", taskCount);
+    }
+}
+
+
+/* */
+__asm void saveContext(uint32_t **stackPointer) {
+    MRS R0, PSP              // 获取当前进程堆栈指针（PSP）
+    STMDB R0!, {R4-R11}      // 将R4-R11寄存器压入栈中，更新PSP
+    STR R0, [R1]             // 将更新后的PSP保存到stackPointer指向的内存中
+    BX LR                    // 返回调用点
+}
+
+__asm void restoreContext(uint32_t **stackPointer) {
+    LDR R0, [R1]             // 从stackPointer指向的内存中加载PSP
+    LDMIA R0!, {R4-R11}      // 从栈中恢复R4-R11寄存器，并更新PSP
+    MSR PSP, R0              // 设置PSP为更新后的值
+    BX LR                    // 返回调用点
+}
+/* systick 中断处理函数，
+void SysTick_Handler(void) {
+	  if(0 == taskCount)
+		{
+			return;
+		}   
+		
+    // 关闭中断
+    __disable_irq();
+
+    if (currentTask >= 0) {
+        saveContext(&taskList[currentTask].stackPointer);  // 保存当前任务上下文
+    }
+
+    currentTask = (currentTask + 1) % taskCount;            // 切换到下一个任务
+
+    restoreContext(&taskList[currentTask].stackPointer);    // 恢复下一个任务上下文
+
+		// 重新开启中断
+    __enable_irq();
+}
+*/
+
+#if 0
+void schedulerInit(void) {
+    SysTick_Config(SystemCoreClock / 1000); // 1ms中断周期
+}
+
+int main_test(void) {
+    // 添加任务
+    addTask(task1, (void *)1);
+    addTask(task2, (void *)2);
+
+    // 初始化调度器
+    schedulerInit();
+
+    // 启动第一个任务
+    currentTask = 0;
+    restoreContext(&taskList[currentTask].stackPointer);
+
+    while (1) {
+        // 主循环可以执行低优先级任务或进入低功耗模式
+    }
+}
+#endif
+

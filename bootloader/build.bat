@@ -1,0 +1,2 @@
+$env:PATH = 'E:\4project\MSYS2\msys2-install\usr\bin;' + $env:PATH; cd 'E:\4project\stm32f407\f407-boot\bootloader'; make clean 2>&1; make -j4 2>&1
+pyocd load "E:\4project\stm32f407\f407-boot\bootloader\build\loader.bin" -t stm32f407zgtx --base-address 0x08000000

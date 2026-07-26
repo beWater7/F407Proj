@@ -1,0 +1,114 @@
+#ifndef __OS_DEBUG_H__
+#define __OS_DEBUG_H__
+
+#include "typedef.h"
+#include <stdio.h>
+typedef void(*__print_callback__)(uint8 *buff, uint8 len);
+
+/*
+"\033[<属性>;<前景色>;<背景色>m"
+
+属性	代码
+重置/默认	0
+加粗	      1
+下划线	      4
+反色     	7
+
+颜色    	前景色代码	背景色代码
+黑色 (Black)  	30	40
+红色 (Red)	    31	41
+绿色 (Green)    	32	42
+黄色 (Yellow)	    33	43
+蓝色 (Blue)	    34	44
+紫色 (Magenta)	35	45
+青色 (Cyan)	    36	46
+白色 (White)   	37	47
+
+\033[0m：重置颜色，回到默认状态。
+
+
+\x1B[31m：切换到红色文本。
+\x1B[0m：重置为默认颜色。
+不同的颜色有不同的 ANSI 码，例如：
+
+\x1B[32m：绿色
+\x1B[33m：黄色
+\x1B[34m：蓝色
+*/
+
+
+#define LINELENTH 1024
+#define CRLF "\r\n"
+#define CRLFCRLF "\r\n\r\n"
+
+enum{
+    DLEVEL_ALERT,
+    DLEVEL_ERROR,
+    DLEVEL_WARN,
+    DLEVEL_REPORT,
+    DLEVEL_INFO,
+    DLEVEL_TRACE,
+    DLEVEL_MAX
+};
+
+
+// 定义日志等级前缀, 3个字节
+#define KERN_DEBUG  "\003"
+#define KERN_TICK   "\002"
+#define KERN_LEVEL  "\001"
+#define KERN_ALERT   KERN_LEVEL"0"
+#define KERN_ERROR   KERN_LEVEL"1"
+#define KERN_WARN    KERN_LEVEL"2"
+#define KERN_REPORT  KERN_LEVEL"3"
+#define KERN_INFO    KERN_LEVEL"4"
+#define KERN_TRACE   KERN_LEVEL"5"
+
+/* 连接符 GCC不能用##拼字符串，只能拼标识符 */
+#define __CONNECT(__A, __B)              __A __B
+/* 连接两个参数的宏 */
+#define CONNECT(__A, __B)                __CONNECT(__A, __B)
+
+
+extern uint8 __print_buf__[LINELENTH]; //保存打印内容
+extern uint8 __print_buf_len__;
+
+void telnet_printf_redirect(__print_callback__ func, void* argc);
+void os_printf_api( const char *format, ...);
+void os_printf_buff_redirect(uint8_t *param, uint16 len, const char *format, ...);
+
+uint8 getDebugLevel(void);
+void setDebugLevel(uint8 level);
+
+// 默认等级宏（使用 DEBUG 等级）
+/* os_printf限制了打印内容长度 */
+#define os_printf(format, ...) os_printf_api(KERN_TICK format, ##__VA_ARGS__)
+#define __os_printf(format, ...) os_printf_api(format, ##__VA_ARGS__)
+#define os_debug_header()  __os_printf("-----%s:%u-----\r\n", __FUNCTION__,__LINE__)
+
+/* 带有函数名和行号的打印, 默认打印级别为KERN_ERROR */
+#define os_debug(format, ...)  os_printf_api(KERN_TICK KERN_DEBUG "[%s:%d] "format, __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
+/* 带有函数名和行号的打印, 默认打印级别为KERN_ERROR */
+#define debug_api(format, ...) printf("[%s:%d] " format, __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
+#define DEBUG_HEADER(format, ...);  printf("[%s:%d] \n" format, __FUNCTION__, __LINE__, ##__VA_ARGS__)
+
+/* 开启该宏表示打印内容包含颜色转义字符 */
+#define DEBUGBUFFWITHCOLOR   1
+#define DEBUGWITHPROMPT      0 
+
+#define assert_printf os_debug
+
+/* 断言 */
+#define CUSTOM_ASSERT(F, X) \
+    do { \
+        if ((F)) { \
+            assert_printf("ASSERT: %s\n", #F); \
+            X;     \
+        } \
+    } while(0)
+
+//#define ASSERT()
+#define cmd_prompt() os_printf_api("[mcu@board]#\n")
+
+#endif
