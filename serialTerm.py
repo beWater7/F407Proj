@@ -52,11 +52,28 @@ class YmodemSender:
         self.ser = ser
         self.gui = gui  # 可选，打印GUI日志
 
-    def _log(self, msg, color='reset'):
+    def _log(self, msg, color='reset', newline=True):
+        suffix = '\n' if newline else ''
         if self.gui:
-            self.gui.print_text(f"[YMODEM] {msg}\n", color)
+            self.gui.print_text(f"[YMODEM] {msg}{suffix}", color)
         else:
-            print(f"[YMODEM] {msg}")
+            end = '\n' if newline else ''
+            print(f"[YMODEM] {msg}", end=end, flush=True)
+
+    def _progress(self, sent, total):
+        """同一行刷新进度条（Tk / 终端）"""
+        if total <= 0:
+            total = 1
+        done = min(sent, total)
+        pct = min(100, done * 100 // total)
+        bar_len = 40
+        filled = bar_len * pct // 100
+        bar = '#' * filled + '-' * (bar_len - filled)
+        line = f"[{bar}] {pct:3d}%  {done}/{total}"
+        if self.gui:
+            self.gui.after(0, lambda l=line: self.gui.update_ymodem_progress(l))
+        else:
+            print(f"\r[YMODEM] {line}", end='', flush=True)
 
     def send_file(self, filepath, already_got_c=False):
         filename = os.path.basename(filepath)
@@ -79,6 +96,8 @@ class YmodemSender:
 
         # 发送文件数据
         sent = 0
+        if self.gui:
+            self.gui.after(0, self.gui.begin_ymodem_progress)
         with open(filepath, 'rb') as f:
             pkt_no = 1
             while True:
@@ -91,14 +110,21 @@ class YmodemSender:
                     return False
                 sent += len(chunk)
                 pkt_no += 1
-                self._log(f"发送进度: {min(sent, filesize)}/{filesize}")
+                self._progress(sent, filesize)
+
+        if self.gui:
+            self.gui.after(0, lambda: self.gui.end_ymodem_progress(True))
+        elif filesize:
+            print()  # 进度条后换行
 
         # EOT：若先收到 NAK，再发第二次 EOT（兼容常见实现）
         self._log("发送EOT")
         self.ser.write(bytes([EOT]))
+        self.ser.flush()
         resp = self._wait_for_ack_or_nak(timeout=5)
         if resp == NAK:
             self.ser.write(bytes([EOT]))
+            self.ser.flush()
             if not self._wait_for_ack(timeout=5):
                 self._log("第二次EOT未收到ACK", 'red')
                 return False
@@ -106,16 +132,40 @@ class YmodemSender:
             self._log("EOT未收到ACK", 'red')
             return False
 
-        # 空包结束会话
+        # 空包结束会话（失败时重试，兼容 USB 串口拆包）
         if not self._wait_for_char(CRC16, timeout=10):
             self._log("等待结束会话 'C' 超时", 'red')
             return False
-        self._send_empty_packet()
-        if not self._wait_for_ack(timeout=5):
-            self._log("空包ACK超时", 'red')
-            return False
+        for attempt in range(1, 4):
+            self._send_empty_packet()
+            try:
+                self.ser.flush()
+            except Exception:
+                pass
+            if self._wait_for_ack(timeout=5):
+                break
+            if attempt < 3:
+                self._log(f"空包ACK超时，重试 ({attempt}/3)...", 'yellow')
+                # 板端失败时会回 'C'，清掉后重发空包
+                self._drain_for_char(CRC16, timeout=1.0)
+            else:
+                self._log("空包ACK超时", 'red')
+                return False
         self._log("文件发送完成", 'green')
         return True
+
+    def _drain_for_char(self, ch, timeout=1.0):
+        """短时等待某个控制字节（如 'C'），丢弃其它噪声。"""
+        start = time.time()
+        while time.time() - start < timeout:
+            c = self.ser.read(1)
+            if not c:
+                continue
+            if c[0] == ch:
+                return True
+            if c[0] == CAN:
+                return False
+        return False
 
     def _send_header(self, filename, filesize):
         packet = bytearray([SOH])
@@ -921,6 +971,49 @@ class SerialMonitor(tk.Tk):
 
     def print_text(self, text, tag='reset'):
         self.txt_output.insert(tk.END, text, tag)
+        self.txt_output.see(tk.END)
+
+    def begin_ymodem_progress(self):
+        """创建一行可覆盖的进度行"""
+        self._ymodem_progress_mark = 'ymodem_progress'
+        try:
+            self.txt_output.mark_unset(self._ymodem_progress_mark)
+        except tk.TclError:
+            pass
+        self.txt_output.insert(tk.END, "[YMODEM] \n", 'cyan')
+        # mark 在刚插入行的行首
+        line = int(self.txt_output.index('end-2c').split('.')[0])
+        self.txt_output.mark_set(self._ymodem_progress_mark, f'{line}.0')
+        self.txt_output.mark_gravity(self._ymodem_progress_mark, tk.LEFT)
+
+    def update_ymodem_progress(self, line_text):
+        """同一行刷新：[############----]  42%  n/total"""
+        mark = getattr(self, '_ymodem_progress_mark', None)
+        text = f"[YMODEM] {line_text}"
+        if not mark:
+            self.begin_ymodem_progress()
+            mark = self._ymodem_progress_mark
+        try:
+            start = self.txt_output.index(mark)
+            line_no = start.split('.')[0]
+            end = f'{line_no}.end'
+            self.txt_output.delete(start, end)
+            self.txt_output.insert(start, text, 'cyan')
+            self.txt_output.mark_set(mark, start)
+            self.txt_output.see(tk.END)
+        except tk.TclError:
+            self.txt_output.insert(tk.END, text + '\n', 'cyan')
+            self.txt_output.see(tk.END)
+
+    def end_ymodem_progress(self, ok=True):
+        mark = getattr(self, '_ymodem_progress_mark', None)
+        if mark:
+            try:
+                self.txt_output.mark_unset(mark)
+            except tk.TclError:
+                pass
+            self._ymodem_progress_mark = None
+        # 进度行已在，补一个换行感：若末行不是空则无需再插
         self.txt_output.see(tk.END)
 
     def on_close(self):

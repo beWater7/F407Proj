@@ -43,10 +43,12 @@
  * http://api.map.baidu.com/weather/v1/?district_id=330108&data_type=now&ak=你的ak
  */
 
-/* weather */
-#define   WEATHER_SERVER       "wttr.in" //HTTPS only
+/* weather：ESP8266 AT 固件不支持 SSL，百度天气(HTTPS-only)不可用，改用 Open-Meteo 纯 HTTP */
+#define   WEATHER_SERVER       "api.open-meteo.com"
 #define   WEATHER_SERVER_PORT  "80"
 #define   WEATHER_CITY         "Hangzhou"  // 你想查询的城市
+#define   WEATHER_LAT          "30.25"
+#define   WEATHER_LON          "120.16"
 
 #define   macUser_ESP8266_TcpServer_OverTime   "1800"             //��������ʱʱ�䣨��λ���룩
 
@@ -64,9 +66,30 @@ void ESP8266_CheckRecv_SendDataTest(void);
 void ESP8266_StaTcpClient_Unvarnish_ConfigTest(void);
 void ESP8266_CheckRecvDataTest(void);
 
+/* HTTP 与 AT 解耦：仅置位，由 esp8266 任务异步执行重配 */
+void ESP8266_RequestWifiReconfig(void);
+uint8_t ESP8266_ConsumeWifiReconfigRequest(void);
+void ESP8266_ProcessPendingWifiReconfig(void);
+void ESP8266_WifiScan(void);
+void ESP8266_WifiStatus(void);
+
+/* 天气获取：周期调度（recv task 轮询）+ 失败退避重试 + 统计 */
+void ESP8266_WeatherPoll(void);
+void ESP8266_WeatherStats(uint32_t *ok, uint32_t *fail, uint32_t *last_ok_ms);
+int  ESP8266_RequestWeather(void);
+
 void getWeather(char *data, uint8_t len);
 int getTemperature(void);
 void getSysTime(char *data, uint8_t len);
+
+/* 默认关闭。开启后 AT 路径里的 Delay_ms 是忙等，易饿死 lwIP/httpd */
+#ifndef ESP8266_ENABLED
+#if defined(CONFIG_APP_ESP8266)
+#define ESP8266_ENABLED 1
+#else
+#define ESP8266_ENABLED 0
+#endif
+#endif
 
 #endif
 

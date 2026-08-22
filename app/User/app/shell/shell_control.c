@@ -20,8 +20,16 @@
 #include "stm32f4x7_eth.h"
 #include "stm32f4x7_phy.h"
 #include "bsp_spi_flash.h"
+#if defined(CONFIG_APP_DHT11)
+#include "bsp_dht11.h"
+#endif
+#include "sntp_api.h"
 #include <string.h>
 #include <stdlib.h>
+#if defined(CONFIG_APP_ESP8266)
+#include "bsp_esp8266.h"
+#include "bsp_esp8266_test.h"
+#endif
 
 extern SYS_THREAD_INFO_T sys_handle_info;
 extern uint8_t byUseBinary;
@@ -101,7 +109,7 @@ uint32_t tab[] = {  0x8CC6D608 ,0x8D4C533C ,
 ???????????
 ???????
 *******************************************************************************/
-static void software_version(void * arg)
+static void __attribute__((unused)) software_version(void * arg)
 {
 	printk("\r\n\t%s\r\n",software_VERSION);
 	printk("%s", SHELL_PROMPT);
@@ -148,6 +156,7 @@ static void check_GPIO(void * arg)
 	uint16_t ReadValue = 0;
 	int data_falg = NO;
 	int argc = cmdline_strtok((char*)arg,argv,2);
+	(void)argc;
 	if(strcmp(argv[1] ,"GPIOA") == 0){
 		ReadValue = GPIO_ReadOutputData(GPIOA);
 		data_falg = EN;
@@ -209,7 +218,7 @@ static void set_GPIO(void * arg)
 	
 	//?��??????????
 	if(strcmp(argv[1] ,"GPIOA") == 0 || strcmp(argv[1] ,"GPIOB") == 0 || strcmp(argv[1] ,"GPIOC") || strcmp(argv[1] ,"GPIOD") == 0){
-		for(char i = 0 ;i < 16 ;i++){
+		for(int i = 0 ;i < 16 ;i++){
 			if(strcmp(argv[2] ,GPIO_PIN_nmb[i]) == 0){
 				if(*argv[3] == '0' || *argv[3] == '1')
 					data_falg = EN;
@@ -265,6 +274,7 @@ static void really_set_GPIO(void * arg)
 {
 	char* argv[4] = {0};
 	int argc = cmdline_strtok((char*)arg,argv,4);
+	(void)argc;
 	printk("\r\n?????????%s_Pin%s?%s" ,argv[1] ,argv[2] ,argv[3]);
 	for(int i = 0 ;i < 4 ;i++){
 		tab_arg[i] = argv[i];
@@ -287,12 +297,12 @@ static void sys_reboot_now(void *arg)
 
 static void sys_ifconfig(void *arg)
 {
+    char* argv[4] = {0};
     ip_addr_t ipaddr = gnetif.ip_addr;
     ip_addr_t netmask = gnetif.netmask;
     ip_addr_t gw = gnetif.gw;
 
-    char* argv[2] = {0};
-    int argc = cmdline_strtok((char*)arg,argv,2);
+    int argc = cmdline_strtok((char*)arg,argv,4);
 
     if(argc < 3)
     {
@@ -390,6 +400,9 @@ static void debugLevelShell(void *arg)
     if(DLEVEL_ALERT <= byLevel && byLevel <= DLEVEL_TRACE)
     {
         setDebugLevel(byLevel);
+        if (getDevInfoParam(&stDevParam) != RET_OK) {
+            memset(&stDevParam, 0, sizeof(stDevParam));
+        }
         stDevParam.byDebugLevel = byLevel;
         setDevParam(&stDevParam);
         devParamSave();
@@ -424,9 +437,12 @@ void format_uptime(uint64_t ms, char *buf, size_t buf_size)
     // ???????????????????????????
     // ???????? "2d 05:34:27"
     if (days > 0) {
-        snprintf(buf, buf_size, "%ud %02u:%02u:%02u", days, hours, minutes, seconds);
+        snprintf(buf, buf_size, "%lud %02lu:%02lu:%02lu",
+                 (unsigned long)days, (unsigned long)hours,
+                 (unsigned long)minutes, (unsigned long)seconds);
     } else {
-        snprintf(buf, buf_size, "%02u:%02u:%02u", hours, minutes, seconds);
+        snprintf(buf, buf_size, "%02lu:%02lu:%02lu",
+                 (unsigned long)hours, (unsigned long)minutes, (unsigned long)seconds);
     }
 }
 
@@ -452,33 +468,47 @@ static void uptime(void *arg)
 uint8_t getCpuUsage(void)
 {
     TaskStatus_t *taskStatusArray;
-    volatile UBaseType_t numTasks;
+    UBaseType_t numTasks;
     uint32_t totalRunTime = 0;
+    uint32_t idleRunTime = 0;
     uint32_t idlePercent = 0;
-	uint32_t cpuUsage = 0;
+    TaskHandle_t idleHandle;
 
-    // �Ȼ�ȡϵͳ����������
     numTasks = uxTaskGetNumberOfTasks();
+    if (numTasks == 0) {
+        return 0;
+    }
     taskStatusArray = pvPortMalloc(numTasks * sizeof(TaskStatus_t));
-    if (taskStatusArray == NULL) return 0; // ����ʧ��
+    if (taskStatusArray == NULL) {
+        return 0;
+    }
 
-    // ��ȡ����״̬��������ʱ��
-   	numTasks = uxTaskGetSystemState(taskStatusArray, numTasks, &totalRunTime);
-	/* For percentage calculations. */
-	totalRunTime /= ( ( configRUN_TIME_COUNTER_TYPE ) 100U );
+    numTasks = uxTaskGetSystemState(taskStatusArray, numTasks, &totalRunTime);
+    if (totalRunTime < 100U) {
+        vPortFree(taskStatusArray);
+        return 0;
+    }
 
-    for(UBaseType_t i = 0; i < numTasks; i++) {
-        if(strcmp(taskStatusArray[i].pcTaskName, "IDLE") == 0) {
-            if(totalRunTime > 0) {
-                idlePercent = taskStatusArray[i].ulRunTimeCounter / totalRunTime;
+    idleHandle = xTaskGetIdleTaskHandle();
+    for (UBaseType_t i = 0; i < numTasks; i++) {
+        if (idleHandle != NULL) {
+            if (taskStatusArray[i].xHandle == idleHandle) {
+                idleRunTime = taskStatusArray[i].ulRunTimeCounter;
+                break;
             }
+        } else if (taskStatusArray[i].pcTaskName != NULL &&
+                   strncmp(taskStatusArray[i].pcTaskName, "IDLE", 4) == 0) {
+            idleRunTime = taskStatusArray[i].ulRunTimeCounter;
             break;
         }
     }
-    //printk("idlePercent:%d\r\n", idlePercent);
     vPortFree(taskStatusArray);
-	cpuUsage = 100 - idlePercent;
-    return cpuUsage;
+
+    idlePercent = idleRunTime / (totalRunTime / 100U);
+    if (idlePercent > 100U) {
+        idlePercent = 100U;
+    }
+    return (uint8_t)(100U - idlePercent);
 }
 
 
@@ -654,82 +684,134 @@ void sys_clear_log(void *arg)
 	printk("%s", SHELL_PROMPT);
 }
 
+#if defined(CONFIG_APP_DHT11)
+static void sys_dht11(void *arg)
+{
+    DHT11_Data_TypeDef d = {0};
+    uint8_t ret;
+    uint8_t idle;
+    int i;
+    const char *stage;
+    (void)arg;
+
+    idle = DHT11_PinLevel();
+    printk("\r\nDHT11 DATA=PG9 idle=%u (expect 1 if pull-up OK)\r\n",
+           (unsigned)idle);
+    if (0 == idle) {
+        printk("WARN: line stuck LOW — check short/VCC/wrong pin\r\n");
+    }
+
+    printk("read x3, interval 1.5s...\r\n");
+    for (i = 0; i < 3; i++) {
+        ret = DHT11_Read_TempAndHumidity(&d);
+        if (SUCCESS == ret) {
+            printk("[%d] OK  RH=%u.%u%%  T=%u.%uC  raw=%02X %02X %02X %02X chk=%02X\r\n",
+                   i + 1,
+                   (unsigned)d.humi_int, (unsigned)d.humi_deci,
+                   (unsigned)d.temp_int, (unsigned)d.temp_deci,
+                   (unsigned)d.humi_int, (unsigned)d.humi_deci,
+                   (unsigned)d.temp_int, (unsigned)d.temp_deci,
+                   (unsigned)d.check_sum);
+        } else {
+            switch (d.err_stage) {
+            case DHT11_ERR_NO_RESP_LOW:  stage = "no ACK low (sensor silent)"; break;
+            case DHT11_ERR_NO_RESP_HIGH: stage = "ACK low ok, no high"; break;
+            case DHT11_ERR_NO_DATA_START:stage = "no data bit start"; break;
+            case DHT11_ERR_BIT:          stage = "bit timeout"; break;
+            case DHT11_ERR_CHECKSUM:     stage = "checksum"; break;
+            default:                     stage = "unknown"; break;
+            }
+            printk("[%d] FAIL stage=%u %s\r\n", i + 1,
+                   (unsigned)d.err_stage, stage);
+        }
+        if (i < 2) {
+            os_sleep_ms(1500);
+        }
+    }
+    printk("hint: DATA->PG9, VCC->3.3/5V, GND->GND; module needs >1s after power\r\n");
+    printk("%s", SHELL_PROMPT);
+}
+#endif
+
 void sys_ping(void *arg)
 {
     char* argv[4] = {0};
     int argc = 0;
     ip_addr_t ping_target;
-    int ping_count = 4;  // 默认ping 4次
-    int current_count = 0;
+    int ping_count = 4;
     const char* ip_address = NULL;
-    int i = 0;
 
     argc = cmdline_strtok((char*)arg, argv, 4);
-    
-    if(argc < 2)
-    {
-        printk("Usage: ping <ip_address> [-n count]\r\n");
-        printk("Example: ping 192.168.1.35 -n 4\r\n");
-        printk("         ping 192.168.1.35 (default 4 times)\r\n");
+
+    if (argc < 2) {
+        printk("usage: ping <ip> [count]\r\n");
+        printk("  ping 192.168.137.1\r\n");
+        printk("  ping 192.168.137.1 8\r\n");
         goto end;
     }
 
-	ping_init(NULL);
-
-    // 第一个参数是IP地址
     ip_address = argv[1];
-    
-    // 检查是否有-n参数
-    if(argc >= 3 && strcmp(argv[2], "-n") == 0 && argc >= 4)
-    {
-        ping_count = atoi(argv[3]);
-        if(ping_count <= 0)
-        {
-            printk("Invalid ping count, using default 4 times\r\n");
+    if (argc >= 3) {
+        ping_count = atoi(argv[2]);
+        if (ping_count <= 0) {
             ping_count = 4;
         }
+        if (ping_count > 20) {
+            ping_count = 20;
+        }
     }
-    else if(argc == 2)
-    {
-        // 只有IP地址参数，默认ping 4次
-        ping_count = 4;
-    }
-    else
-    {
-        printk("Usage: ping <ip_address> [-n count]\r\n");
+
+    if (ipaddr_aton(ip_address, &ping_target) == 0) {
+        printk("ping: invalid IP address: %s\r\n", ip_address);
         goto end;
     }
 
-    // 解析IP地址
-    if(ipaddr_aton(ip_address, &ping_target) == 0)
-    {
-        printk("Invalid IP address: %s\r\n", ip_address);
-        goto end;
-    }
-
-    printk("PING %s: 32 data bytes\r\n", ip_address);
-
-    // 执行ping操作
-    for(current_count = 0; current_count < ping_count; current_count++)
-    {
-        // 调用ping发送函数
-        ping_send(&ping_target);
-        
-        // 等待响应或延时（这里可能需要根据实际的ping实现调整）
-        // sys_msleep(PING_DELAY); // 如果需要间隔时间，可以取消注释
-        os_sleep_ms(20);
-        // 注意：这里需要根据ping的实际实现来处理响应和超时
-    }
-
-    printk("PING %s completed, sent %d packets\r\n", ip_address, ping_count);
+    printk("\r\n");
+    ping_run(&ping_target, ping_count);
 
 end:
     printk("%s", SHELL_PROMPT);
-    return;
 }
 
+#if defined(CONFIG_APP_ESP8266)
+static void sys_wifi(void *arg)
+{
+    char *argv[3] = {0};
+    int argc;
+
+    argc = cmdline_strtok((char *)arg, argv, 3);
+    if ((argc >= 1 && 0 == strcmp(argv[0], "wifi_scan")) ||
+        (argc >= 2 && 0 == strcmp(argv[1], "scan"))) {
+        ESP8266_WifiScan();
+    } else if (argc >= 2) {
+        printk("usage: wifi\r\n");
+        printk("       wifi scan\r\n");
+    } else {
+        ESP8266_WifiStatus();
+    }
+    printk("%s", SHELL_PROMPT);
+}
+static void sys_weather(void *arg)
+{
+    char weather[16] = {0};
+    uint32_t ok = 0, fail = 0, last_ok_ms = 0;
+    uint32_t ago_s = 0;
+
+    ESP8266_WeatherStats(&ok, &fail, &last_ok_ms);
+    getWeather(weather, sizeof(weather));
+
+    if (last_ok_ms) {
+        ago_s = (os_time() - last_ok_ms) / 1000U;
+    }
+    printk("weather: %s, temp=%d C\r\n", weather, getTemperature());
+    printk("        ok=%lu fail=%lu last_ok=%lus ago\r\n",
+           (unsigned long)ok, (unsigned long)fail, (unsigned long)ago_s);
+    printk("%s", SHELL_PROMPT);
+}
+#endif
+
 #if 0
-/* ĳ������Ķ�ջʹ����� */
+/* 获取某个任务的栈使用情况 */
 void CheckTaskStackUsage(uint8_t* param, void *arg) {
     UBaseType_t stackHighWaterMark = 0;
     TaskHandle_t taskHandle = NULL;
@@ -801,6 +883,14 @@ void shell_conteol_register(void)
 	shell_register_command("clearLog", sys_clear_log);
 	shell_register_command("setWeb", sysSetWeb);
 	shell_register_command("ping", sys_ping);
+#if defined(CONFIG_APP_ESP8266)
+	shell_register_command("wifi", sys_wifi);
+	shell_register_command("wifi_scan", sys_wifi);
+	shell_register_command("weather", sys_weather);
+#endif
+#if defined(CONFIG_APP_DHT11)
+	shell_register_command("dht11", sys_dht11);
+#endif
 }
 
 

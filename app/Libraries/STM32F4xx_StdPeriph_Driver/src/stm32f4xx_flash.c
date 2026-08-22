@@ -480,7 +480,7 @@ FLASH_Status FLASH_EraseSector(uint32_t FLASH_Sector, uint8_t VoltageRange)
   /* Check the parameters */
   assert_param(IS_FLASH_SECTOR(FLASH_Sector));
   assert_param(IS_VOLTAGERANGE(VoltageRange));
-  //printf("000000000000000000000000000000000000000000000\n");
+
   if(VoltageRange == VoltageRange_1)
   {
      tmp_psize = FLASH_PSIZE_BYTE;
@@ -499,7 +499,7 @@ FLASH_Status FLASH_EraseSector(uint32_t FLASH_Sector, uint8_t VoltageRange)
   }
   /* Wait for last operation to be completed */
   status = FLASH_WaitForLastOperation();
-  //printf("11111111111111111111111111111111111111111111\n");
+
   if(status == FLASH_COMPLETE)
   { 
     /* if the previous operation is completed, proceed to erase the sector */
@@ -508,15 +508,15 @@ FLASH_Status FLASH_EraseSector(uint32_t FLASH_Sector, uint8_t VoltageRange)
     FLASH->CR &= SECTOR_MASK;
     FLASH->CR |= FLASH_CR_SER | FLASH_Sector;
     FLASH->CR |= FLASH_CR_STRT;
-    //printf("222222222222222222222222222222222222222222\n");
+
     /* Wait for last operation to be completed */
     status = FLASH_WaitForLastOperation();
-    //printf("333333333333333333333333333333333333333333\n");
+
     /* if the erase operation is completed, disable the SER Bit */
     FLASH->CR &= (~FLASH_CR_SER);
     FLASH->CR &= SECTOR_MASK; 
   }
-  //printf("44444444444444444444444444444444444444444444\n");
+
   /* Return the Erase Status */
   return status;
 }

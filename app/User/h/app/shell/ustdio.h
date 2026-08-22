@@ -14,7 +14,7 @@
 #define _unstandard_format_
 
 /* Public macro ------------------------------------------------------------*/
-//#include "os_debug.h"
+#include "os_debug.h"
 
 #define USE_CUSTOM_PRINTK  0
 

@@ -2,7 +2,7 @@ ENTRY(Reset_Handler)
 
 MEMORY
 {
-  FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 256K     /* APP */
+  FLASH (rx)      : ORIGIN = 0x08008000, LENGTH = 256K     /* APP1 (alias of link_app1.ld) */
   RAM   (xrw)     : ORIGIN = 0x20000000, LENGTH = 128K
   PSRAM (xrw)     : ORIGIN = 0x6C000000, LENGTH = 1020K
 }
@@ -91,9 +91,12 @@ SECTIONS
     *(.EXRAM)
     *(.exram*)
     . = ALIGN(8);
+    _exram_end = .;
   } > PSRAM
 
-  _heap_start = ORIGIN(PSRAM);
+  /* newlib _sbrk 若从 PSRAM 起点长，会和 ucHeap（FreeRTOS）重叠：
+   * HTTP JSON 盖掉 g_pstDevParam，rebuildCfg 再写进 config，hex_dump 里就会看到 errorMsg/ssid。 */
+  _heap_start = _exram_end;
   _heap_end   = ORIGIN(PSRAM) + LENGTH(PSRAM);
   _stack_top = _estack;
 

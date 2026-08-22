@@ -62,8 +62,8 @@
                                             _13,_14,_15,_16,__N,...)      __N
 
 /* ��ȡ��θ����ĺ� */
-//#define __PLOOC_VA_NUM_ARGS(...)                                                \
-//                    __PLOOC_VA_NUM_ARGS_IMPL( 0,##__VA_ARGS__,16,15,14,13,12,11,10,9,   \
+//#define __PLOOC_VA_NUM_ARGS(...)
+//                    __PLOOC_VA_NUM_ARGS_IMPL( 0,##__VA_ARGS__,16,15,14,13,12,11,10,9,
 //                                              8,7,6,5,4,3,2,1,0)
 
 /* ��ȡ��һ������ */
@@ -72,7 +72,7 @@
 
 
 /* �жϵ�ǰ�Ƿ��flag����flag�ǵ�һ������һ��Ϊ����Ϊ1 */
-//#define __PLOOC_VA_NUM_ARGS(...)                                                \
+//#define __PLOOC_VA_NUM_ARGS(...)
 //                    return (strcmp(KERN_ERROR,FIRST_ARG(...)) ? 0:1)
 
 #define __PLOOC_VA_NUM_ARGS(...) (strlen(GET_FIRST_ARG(__VA_ARGS__)) == 2 ? 1:0)
@@ -104,21 +104,21 @@
 
 
 /* Ŀǰ��֧��ERROR�����ӡ��ERROR�����ӡ�»��ӡ���к� */
-//#define __BOOTLOADER_DEBUG_2(flag, format, ...) do{   \
-//                                            if ((flag) != NULL && strlen(flag) > 1 && (flag)[1] == '1') { \
-//                                                /* ���ڲ���ע��Ҳ��Ҫ���з�������ᱨ�� */ \
-//                                                printf("[boot] [%s:%d] "format,__FUNCTION__, __LINE__, ##__VA_ARGS__); \
-//                                            }else{ \
-//                                                printf("[boot] " format, ##__VA_ARGS__); \
-//                                            }     \
+//#define __BOOTLOADER_DEBUG_2(flag, format, ...) do{
+//                                            if ((flag) != NULL && strlen(flag) > 1 && (flag)[1] == '1') {
+//                                                /* ���ڲ���ע��Ҳ��Ҫ���з�������ᱨ�� */
+//                                                printf("[boot] [%s:%d] "format,__FUNCTION__, __LINE__, ##__VA_ARGS__);
+//                                            }else{
+//                                                printf("[boot] " format, ##__VA_ARGS__);
+//                                            }
 //                                          }while(0)
 
-//#define __BOOTLOADER_DEBUG_1(flag, format, ...) do{   \
-//                                                if ((flag) != NULL && strlen(flag) == 1 && (flag)[1] == '1') { \
-//                                                    printf("[boot] [%s:%d] " format, __FUNCTION__, __LINE__, ##__VA_ARGS__); \
-//                                                } else { \
-//                                                    printf("[boot] " format, ##__VA_ARGS__); \
-//                                                } \
+//#define __BOOTLOADER_DEBUG_1(flag, format, ...) do{
+//                                                if ((flag) != NULL && strlen(flag) == 1 && (flag)[1] == '1') {
+//                                                    printf("[boot] [%s:%d] " format, __FUNCTION__, __LINE__, ##__VA_ARGS__);
+//                                                } else {
+//                                                    printf("[boot] " format, ##__VA_ARGS__);
+//                                                }
 //                                            } while(0)
 
 
@@ -138,13 +138,13 @@
 
 
 ///* ֧�ֿɱ�����ĺ꺯�� */
-//#define BOOTLOADER_DEBUG(...) do{                          \
+//#define BOOTLOADER_DEBUG(...) do{
 //    CONNECT2(__BOOTLOADER_DEBUG_, __PLOOC_VA_NUM_ARGS(__VA_ARGS__))(##__VA_ARGS__); \     //()(����)
 //    }while(0)
 
 
 /* ����ɱ�����ĵ��Ժ꣬���ݲ�������ѡ���Ӧ�ĵ��Ժ��� */
-//#define BOOTLOADER_DEBUG(...) \
+//#define BOOTLOADER_DEBUG(...)
 //        CONNECT2(__BOOTLOADER_DEBUG_, __PLOOC_VA_NUM_ARGS(__VA_ARGS__))(__VA_ARGS__)
 
 
@@ -167,19 +167,19 @@ void print_string(char* x) {
 }
 
 
-//#define BOOTLOADER_DEBUG(num, ...)  do{ \
-//    printf("[BOOT] "); \
-//    va_list args; \
-//    va_start(args, num); \
-//    for(int i = 0; i < num; i++) { \
-//        if(0 == i && !strcmp(KERN_ERROR, va_arg(args, char *)))  \
-//        { \
-//            printf("[%s:%d] ",__FUNCTION__,__LINE__); \
-//            continue; \
-//        } \
-//       PRINT(va_arg(args, void*)); \
-//    } \
-//    va_end(args); \
+//#define BOOTLOADER_DEBUG(num, ...)  do{
+//    printf("[BOOT] ");
+//    va_list args;
+//    va_start(args, num);
+//    for(int i = 0; i < num; i++) {
+//        if(0 == i && !strcmp(KERN_ERROR, va_arg(args, char *)))
+//        {
+//            printf("[%s:%d] ",__FUNCTION__,__LINE__);
+//            continue;
+//        }
+//       PRINT(va_arg(args, void*));
+//    }
+//    va_end(args);
 //}while(0)
 #endif
 #define BOOTLOADER_PREFIX [BOOT]
@@ -207,7 +207,7 @@ void print_string(char* x) {
 #define MAIN_APP  1
 #define DUAL_APP  2
 
-#define OTA_MODE  MAIN_APP
+#define OTA_MODE  DUAL_APP
 
 #define OTA_REGION_SPI_FLASH  1
 
@@ -220,9 +220,11 @@ void print_string(char* x) {
 void PrintProgressBar(uint32_t size, uint32_t total_size);
 
 
-/* ����ӿ� */
+/* 对外接口 */
 void show_boot_info(void);
+uint8_t app_image_valid(uint32_t app_addr);
 uint8_t jump_app(uint32_t app_addr);
+uint32_t boot_resolve_app_addr(void);
 uint32_t ReadFirmwareFlag(void);
 void SetFirmwareFlag(uint32_t flag);
 void CleanFirmwareFlag(uint32_t flag);

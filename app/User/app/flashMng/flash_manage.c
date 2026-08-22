@@ -302,7 +302,9 @@ void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInf
 {
     uint32_t calc_crc = 0;
     uint32_t addr = 0;
+    (void)addr;
     uint32_t end_addr = 0;
+    (void)end_addr;
     PartitionHeader hdr = {0};
     uint8_t i = 0;
 
@@ -346,29 +348,21 @@ void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInf
         }
         else
         {
-            os_mutex_lock(self->lock);
-            /* 管理头错误直接全擦除 */
-            os_debug("name:%s hdr.magic: %d hdr.crc: %d Partition header CRC error, erasing whole partition...\n", 
-                      self->pPartInfo[i].name, hdr.magic, hdr.crc);
-            addr = self->pPartInfo[i].start_addr;
-            end_addr = addr + self->pPartInfo[i].size;
-            if(flash_partition_erase(self, i, addr, end_addr))
-            {
-                os_debug("partition_erase err!\n");
-                return;
-            }
+            /* 头无效：只重建管理头扇区，不要整分区擦除（会误伤 web/config） */
+            os_debug("name:%s hdr invalid (magic=0x%08lx crc=0x%08lx), reset header only\n",
+                      self->pPartInfo[i].name,
+                      (unsigned long)hdr.magic,
+                      (unsigned long)hdr.crc);
 
-            /* 写入新头 */
+            os_mutex_lock(self->lock);
             hdr.magic = PARTITION_MAGIC;
             hdr.used_size = 0;
             hdr.crc = crc32_checksum((uint8_t *)&hdr, sizeof(hdr) - sizeof(hdr.crc));
-
-            //flash_data_print((uint8_t *)0x080A0000, 128);
+            HW_ERASE(self->pPartInfo[i].start_addr);
             HW_WRITE(self->pPartInfo[i].start_addr, (uint8_t *)&hdr, sizeof(PartitionHeader));
-            //flash_data_print((uint8_t *)0x080A0000, 128);
-            os_debug("new hdr.crc:0x%08x\n", hdr.crc);
             self->pPartInfo[i].size_used = 0;
             os_mutex_unlock(self->lock);
+            os_debug("new hdr.crc:0x%08x\n", hdr.crc);
         }
 #if STORAGE_MNG_DEBUG
         os_printf(
@@ -487,6 +481,8 @@ void hex_dump(uint8_t part, uint32_t offset, uint32_t len, uint8_t dev_id)
     uint32_t remain;
     uint32_t cur;
     uint32_t n;
+    uint32_t phys;
+    STORAGE_CTRL_T *self = &g_stSpiFlashPart;
     (void)dev_id;
 
     if (part >= SPI_FLASH_PART_MAX || len == 0) {
@@ -499,14 +495,17 @@ void hex_dump(uint8_t part, uint32_t offset, uint32_t len, uint8_t dev_id)
         len = spi_flash_table[part].size - offset;
     }
 
+    /* 调试转储绕过 used_size：管理头只记录上次写入长度，截断后会把栈上残留 JSON 打出来 */
     remain = len;
     cur = offset;
     while (remain > 0) {
         n = (remain > sizeof(chunk)) ? sizeof(chunk) : remain;
-        if (SPI_FLASH_READ(part, cur, chunk, n) < 0) {
-            printf("hex_dump: read fail @0x%lx\n", (unsigned long)cur);
-            return;
+        phys = spi_flash_table[part].start_addr + cur;
+        if (self->byManage) {
+            phys += PARTITION_HEADER_SIZE;
         }
+        memset(chunk, 0, sizeof(chunk));
+        HW_READ(phys, chunk, n);
         flash_data_print(chunk, (uint16_t)n);
         cur += n;
         remain -= n;

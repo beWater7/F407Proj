@@ -1,0 +1,26 @@
+# clangd：APP / Boot 各用各的 compile_commands.json
+# 生成：./tools/gen-compdb.sh   或  make -C app compdb && make -C bootloader compdb
+#
+# 不要在仓库根目录放一份合并的 compile_commands.json，
+# 也不要给 clangd 设 --compile-commands-dir=<仓库根>，否则同名函数会串跳。
+
+CompileFlags:
+  QueryDriver: **/arm-none-eabi-gcc
+  Add:
+    - -Wno-unknown-warning-option
+
+---
+If:
+  PathMatch: .*/app/.*
+  PathExclude: .*/bootloader/.*
+CompileFlags:
+  CompilationDatabase: app
+  Add:
+    - -include
+    - app/include/generated/autoconf.h
+
+---
+If:
+  PathMatch: .*/bootloader/.*
+CompileFlags:
+  CompilationDatabase: bootloader

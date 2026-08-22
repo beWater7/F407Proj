@@ -53,63 +53,61 @@ static void ymodem_erase_app_range(uint32_t start_addr, uint32_t size)
   * @retval 0：成功接收
   *         1：时间超时
   */
-static int32_t Receive_Byte(uint8_t *c, uint32_t timeout_ms)
+static void dwt_cyccnt_enable(void)
 {
-    // while (timeout-- > 0)
-    // {
-    //     if (SerialKeyPressed(c) == 1)
-    //     {
-    //         return 0;
-    //     }
-    // }
-    // return -1;
-
-    // uint32_t timeout = timeout_ms;
-
-    // while (timeout--) 
-    // {
-    //     if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE) == SET) 
-    //     {
-    //         *c = (uint8_t)USART_ReceiveData(USART1);
-    //         return 0;   // success
-    //     }
-    //     DelayMs(1);   // 用你自己的延时函数
-    // }
-    // return -1;
-    #if 0
-    uint32_t start = DWT->CYCCNT;
-    uint32_t wait_cycles = timeout_ms * (SystemCoreClock / 1000);  // 毫秒转cycle
-
-    while ((DWT->CYCCNT - start) < wait_cycles)
-    {
-        if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE))
-        {
-            *c = USART_ReceiveData(USART1);
-            return 0;
-        }
-    }
-    return -1;  // timeout
-    #endif
-    // Ensure DWT cycle counter is enabled
-    if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk)) 
+    if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk))
     {
         CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
+    }
+    if (!(DWT->CTRL & DWT_CTRL_CYCCNTENA_Msk))
+    {
         DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
     }
+}
 
-    uint32_t start = DWT->CYCCNT;
-    uint64_t wait_cycles = (uint64_t)timeout_ms * (SystemCoreClock / 1000);  // Prevent overflow
+static int32_t Receive_Byte(uint8_t *c, uint32_t timeout_ms)
+{
+    uint32_t start;
+    uint32_t wait_cycles;
+
+    dwt_cyccnt_enable();
+    start = DWT->CYCCNT;
+    wait_cycles = timeout_ms * (SystemCoreClock / 1000u);
 
     while ((DWT->CYCCNT - start) < wait_cycles)
     {
-        if (USART_GetFlagStatus(USART1, USART_FLAG_RXNE))
+        if (USART1->SR & USART_FLAG_RXNE)
         {
-            *c = USART_ReceiveData(USART1);
+            *c = (uint8_t)(USART1->DR & 0xFFu);
             return 0;
         }
     }
+    return -1;
+}
 
-    return -1;  // timeout
+/** 连续收 n 字节；总超时 timeout_ms（非整包每字节 1s） */
+static int32_t Receive_Bytes(uint8_t *dst, uint32_t n, uint32_t timeout_ms)
+{
+    uint32_t start;
+    uint32_t wait_cycles;
+
+    dwt_cyccnt_enable();
+    start = DWT->CYCCNT;
+    wait_cycles = timeout_ms * (SystemCoreClock / 1000u);
+
+    while (n > 0u)
+    {
+        if ((DWT->CYCCNT - start) >= wait_cycles)
+        {
+            return -1;
+        }
+        if (USART1->SR & USART_FLAG_RXNE)
+        {
+            *dst++ = (uint8_t)(USART1->DR & 0xFFu);
+            n--;
+        }
+    }
+    return 0;
 }
 
 
@@ -120,36 +118,31 @@ static int32_t Receive_Byte(uint8_t *c, uint32_t timeout_ms)
   */
 static uint32_t Send_Byte(uint8_t c)
 {
-    //SerialPutChar(c);
     uint32_t timeout_ms = 10;
+    uint32_t t = timeout_ms * (SystemCoreClock / 1000u);
+    uint32_t start;
 
-    uint32_t t = timeout_ms * (SystemCoreClock / 1000);  // ms 转 cycles
-    uint32_t start = DWT->CYCCNT;
-
-    // Ensure DWT cycle counter is enabled
-    if (!(CoreDebug->DEMCR & CoreDebug_DEMCR_TRCENA_Msk)) 
-    {
-        CoreDebug->DEMCR |= CoreDebug_DEMCR_TRCENA_Msk;
-        DWT->CTRL |= DWT_CTRL_CYCCNTENA_Msk;
-    }
-
-    // 等待 TXE 发送缓冲区空
-    while (USART_GetFlagStatus(USART1, USART_FLAG_TXE) == RESET)
-    {
-        if ((DWT->CYCCNT - start) > t)
-            return -1;   // 超时
-    }
-
-    USART_SendData(USART1, c);
-
-    // 等待 TC（发送完成）
+    dwt_cyccnt_enable();
     start = DWT->CYCCNT;
-    while (USART_GetFlagStatus(USART1, USART_FLAG_TC) == RESET)
+
+    while (!(USART1->SR & USART_FLAG_TXE))
     {
         if ((DWT->CYCCNT - start) > t)
-            return -2;
+        {
+            return (uint32_t)-1;
+        }
     }
+    USART1->DR = c;
 
+    /* 等移位完成，避免紧接着的日志打印插队导致对端漏 ACK */
+    start = DWT->CYCCNT;
+    while (!(USART1->SR & USART_FLAG_TC))
+    {
+        if ((DWT->CYCCNT - start) > t)
+        {
+            return (uint32_t)-2;
+        }
+    }
     return 0;
 }
 
@@ -165,7 +158,7 @@ static uint32_t Send_Byte(uint8_t c)
   */
 static int32_t Receive_Packet(uint8_t *data, int32_t *length, uint32_t timeout)
 {
-    uint16_t i, packet_size;
+    uint16_t packet_size;
     uint8_t c;
     *length = 0;
     if (Receive_Byte(&c, timeout) != 0)
@@ -232,9 +225,12 @@ static int32_t Receive_Packet(uint8_t *data, int32_t *length, uint32_t timeout)
     {
         return -1;
     }
-    for (i = 1; i < (packet_size + PACKET_OVERHEAD); i++)
+    /* 余下 seq/payload/CRC 整段快收。
+     * 注意：空文件名包只有 128B，USB-UART/虚拟机下 SOH 与后续字节常被拆开，
+     * 超时过短会误判失败并回 'C'，PC 端表现为「空包ACK超时」。 */
     {
-        if (Receive_Byte(data + i, timeout) != 0)
+        uint32_t remain = (uint32_t)packet_size + PACKET_OVERHEAD - 1u;
+        if (Receive_Bytes(data + 1, remain, 1000u) != 0)
         {
             return -1;
         }

@@ -1,0 +1,60 @@
+# ── Build / link outputs ──
+build/
+**/build/
+*.o
+*.a
+*.d
+*.elf
+*.map
+*.lst
+*.su
+*.hex
+*.ihex
+*.srec
+*.axf
+*.out
+*.bin
+
+# Keep intentional source/data bins if any are added later under ! patterns.
+# Firmware packages are generated (see below).
+
+# ── OTA / web packaging products ──
+/web.bin
+/upg.bin
+/header.bin
+web/web.bin
+web/web-*.bin
+
+# ── Python ──
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+.venv/
+venv/
+
+# ── IDE / editor ──
+.idea/
+*.swp
+*.swo
+*~
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json.example
+
+# ── OS junk ──
+.DS_Store
+Thumbs.db
+desktop.ini
+
+# ── Local machine deploy (VM / USB / udev) ──
+/localtools/
+
+# ── Debug / coverage / misc ──
+*.log
+*.tmp
+cscope.out
+tags
+.compile_commands.json
+compile_commands.json
+.cache/

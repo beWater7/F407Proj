@@ -48,7 +48,7 @@
 #define USE_Delay
 
 #ifdef USE_Delay
-  #include "../SysTick/bsp_systick.h"    /* Header file where the Delay function prototype is exported */
+  #include "bsp_systick.h"    /* Header file where the Delay function prototype is exported */
   #define _eth_delay_    Delay_10ms   /* User can provide more timing precise _eth_delay_ function 
                                    in this example Systick is configured with an interrupt every 10 ms*/
 #else

@@ -16,6 +16,8 @@
 #include "cmd_src.h"
 #include "iap.h"
 
+#include "bsp_led.h"
+
 extern uint32_t dwCurrentAppAddr;
 
 
@@ -168,10 +170,10 @@ void partition_info_show(void)
                 CUSTOM_ASSERT(NULL == gstFlashManage[i].pStorageCtrl, return);
                 part = &(gstFlashManage[i].pStorageCtrl->pPartInfo[j]);
                 CUSTOM_ASSERT(NULL == part, return);
-                printf("%-10s   addr:0x%08x  size:0x%-8x  size_used:%-6d\n", part->name,        \
-                                                                             part->start_addr,  \
-                                                                             part->size,        \
-                                                                             part->size_used);
+                printf("%-10s   addr:0x%08lx  size:0x%-8lx  size_used:%-6lu\n", part->name,        \
+                                                                             (unsigned long)part->start_addr,  \
+                                                                             (unsigned long)part->size,        \
+                                                                             (unsigned long)part->size_used);
 
             }
             printf("----------------------------------------------------------\n\n");
@@ -230,7 +232,6 @@ void KEY_GPIO_Config(void)
 
 void CheckAndUpdateApp(void) {
     uint32_t delayCount = 10000; // 5秒
-    uint32_t appBuffLen = APP_FLASH_SIZE; // 应用程序数据长度
 
     KEY_GPIO_Config();
 
@@ -260,20 +261,16 @@ void CheckAndUpdateApp(void) {
     }
 }
 
-/* systick反初始化 */
+/* systick反初始化
+ * 注意：SysTick_IRQn == -1，是内核异常不是 NVIC IRQ。
+ * 对它调用 NVIC_ClearPendingIRQ()/NVIC_SetPriority() 会算出越界地址，
+ * 写总线 → IMPRECISE bus fault → HardFault，表现为 Jump 后板子假死。 */
 void SysTick_Deinit(void) {
-    // 1. 禁用 SysTick 定时器和中断
-    SysTick->CTRL &= ~(SysTick_CTRL_ENABLE_Msk | SysTick_CTRL_TICKINT_Msk);
-
-    // 2. 清空计数器和加载值
+    SysTick->CTRL = 0;
     SysTick->LOAD = 0;
-    SysTick->VAL = 0;
-
-    // 3. 可选：清除中断挂起状态（具体芯片实现可能不同）
-    NVIC_ClearPendingIRQ(SysTick_IRQn);
-
-    // 4. 可选：将优先级恢复到默认值
-    NVIC_SetPriority(SysTick_IRQn, 0);
+    SysTick->VAL  = 0;
+    /* 清 SysTick 挂起位（ICSR.PENDSTCLR），不要走 NVIC_*API */
+    SCB->ICSR = SCB_ICSR_PENDSTCLR_Msk;
 }
 
 
@@ -311,18 +308,86 @@ void JumpToApplication(uint32_t dwCurrentAppAddr)
     }
 }
 
+static void ota_flag_clear(STORAGE_CTRL_PTR pInfoStorage, uint8_t byInfoPart,
+                           uint32_t dwInfoStartAddr, uint32_t dwInfoEraseSize)
+{
+    ota_flag_t cleared;
+
+    memset(&cleared, 0, sizeof(cleared));
+    /* 先擦再写空结构，避免半写入脏数据被当成 pending */
+    pInfoStorage->stPartOps.partition_erase(pInfoStorage, byInfoPart,
+                                            dwInfoStartAddr,
+                                            dwInfoStartAddr + dwInfoEraseSize);
+    pInfoStorage->stPartOps.partition_write(pInfoStorage, byInfoPart, 0,
+                                            (uint8 *)&cleared, sizeof(cleared));
+}
+
+static int s_host_flash_override;
+
+/* 保留 magic+active_app 供下次选槽，但清掉 pending，避免反复搬运 */
+static int ota_flag_commit_done(uint8_t active_slot)
+{
+    ota_flag_t done;
+
+    memset(&done, 0, sizeof(done));
+    done.magic = OTA_FLAG_MAGIC;
+    done.active_app = (active_slot == 1U) ? 1U : 0U;
+    done.upgrade_flag = 0;
+    done.state = 0xAAu;
+    if (SPI_FLASH_WRITE_VERIFY(PART_OTA, 0, (uint8 *)&done, sizeof(done))) {
+        BOOTL_PRINT(BOOT_ERROR"commit OTA done flag failed (pending may stick)\n");
+        return -1;
+    }
+    return 0;
+}
+
+/*
+ * flash.sh / pyocd 直烧内部 APP 后写入 PART_RES。
+ * 命中则：取消 SPI pending、把 active 指到刚烧的槽、擦掉 cookie（一次性）。
+ * @retval 1 已处理（跳过 SPI 搬运）  0 无 cookie
+ */
+static int ota_apply_host_flash_override(uint32_t *pCurrentAppAddr)
+{
+    ota_host_flash_t host = {0};
+    ota_host_flash_t zero;
+    uint8_t slot;
+    uint32_t addr;
+
+    INTERNAL_FLASH_READ(PART_RES, 0, (uint8 *)&host, sizeof(host));
+    if (host.magic != OTA_HOST_FLASH_MAGIC) {
+        return 0;
+    }
+
+    slot = (host.slot == 1U) ? 1U : 0U;
+    addr = slot ? APP2_ADDRESS : APP1_ADDRESS;
+    BOOTL_PRINT(BOOT_WARN"host flash override: skip SPI OTA, run APP%u @0x%08lx\n",
+                (unsigned)(slot + 1U), (unsigned long)addr);
+
+    (void)ota_flag_commit_done(slot);
+
+    memset(&zero, 0, sizeof(zero));
+    if (INTERNAL_FLASH_WRITE(PART_RES, (uint8 *)&zero, sizeof(zero))) {
+        BOOTL_PRINT(BOOT_WARN"host flash cookie clear failed (will retry next reset)\n");
+    }
+
+    if (pCurrentAppAddr != NULL) {
+        *pCurrentAppAddr = addr;
+    }
+    s_host_flash_override = 1;
+    return 1;
+}
+
 /*****************************************************
  * @fn       fw_upgrade_from
  * @brief    OTA升级的通用实现：从 pInfoStorage 的 byInfoPart 分区读取OTA信息，
  *           校验后从 pSrcStorage 里 target_app 对应分区取出固件，
  *           搬运并校验写入内部Flash的 PART_FW1，最后清空OTA控制信息区。
- * @note     fw_upgrade()/fw_upgrade_v2() 原来是几乎一模一样的两份代码，
- *           唯一区别是OTA信息、固件源分别存在内部Flash还是SPI Flash上。
- *           两份拷贝以后改升级逻辑很容易改一处忘另一处，这里合并成一份、
- *           把"存哪种介质"作为参数传入，具体差异见各参数说明。
- *           为了不改变原有行为，这里完整保留了两个原函数各自的执行顺序
- *           （例如"清空OTA信息"这一步，内部Flash版本是先清后写，
- *           SPI Flash版本是先写后清，行为上原本就不一致，这里原样保留）。
+ * @note     断电保护（SPI OTA / MAIN_APP）：
+ *           1) 仅 magic+upgrade_flag==1 才认为待升级（拒绝擦除态 0xFF..）
+ *           2) 源 CRC 通过后才擦写 APP1
+ *           3) APP1 写完并 CRC+向量校验通过后，才清除 OTA 标志
+ *              —— 写 APP 中途掉电：标志仍在，下次上电从 SPI 重试
+ *           4) 源损坏则清除标志，避免死循环升级
  * @param    pInfoStorage        : 存放 ota_flag_t 的存储介质控制块
  *           byInfoPart          : ota_flag_t 所在分区号(相对 pInfoStorage)
  *           dwInfoEraseSize     : 升级完成后清空OTA信息区时的擦除长度
@@ -330,8 +395,8 @@ void JumpToApplication(uint32_t dwCurrentAppAddr)
  *           byShortcutSrcPart   : 若 target_app 等于这个值，说明固件源已经
  *                                 在目标分区(PART_FW1)上，不需要搬运；
  *                                 传 0xFF 表示不存在这种情况(介质不同时不可能相同)
- *           bEraseInfoBeforeWrite : 1=先清OTA信息再写新固件；0=先写新固件再清OTA信息
- *           pCurrentAppAddr     : 输出，写入固件校验失败时切换到APP2使用
+ *           bEraseInfoBeforeWrite : 保留参数；断电安全路径忽略“先清标志”
+ *           pCurrentAppAddr     : 输出跳转偏好地址
  * @retval   0: 成功(含"无需升级"情形)  -1: 失败
  *****************************************************/
 static int fw_upgrade_from(STORAGE_CTRL_PTR pInfoStorage, uint8_t byInfoPart, uint32_t dwInfoEraseSize,
@@ -344,98 +409,183 @@ static int fw_upgrade_from(STORAGE_CTRL_PTR pInfoStorage, uint8_t byInfoPart, ui
     uint8_t byOtaRegion = 0;
     uint32_t dwInfoStartAddr = 0;
 
+    (void)bEraseInfoBeforeWrite; /* 断电安全：禁止在写 APP 前清标志 */
+
     CUSTOM_ASSERT(NULL == pCurrentAppAddr, goto exit);
 
     /* 读取 OTA信息分区数据 */
     pInfoStorage->stPartOps.partition_read(pInfoStorage, byInfoPart, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t));
 
-    BOOTL_PRINT(BOOT_INFO"stOtaFlag.upgrade_flag: %d \n",  stOtaFlag.upgrade_flag);
-    BOOTL_PRINT(BOOT_INFO"stOtaFlag.target_app: %d \n",  stOtaFlag.target_app);
-    BOOTL_PRINT(BOOT_INFO"stOtaFlag.len: %d \n",  stOtaFlag.len);
-    BOOTL_PRINT(BOOT_INFO"stOtaFlag.crc32: 0x%08x \n",  stOtaFlag.crc32);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.state: %lu \n", (unsigned long)stOtaFlag.state);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.upgrade_flag: %lu \n", (unsigned long)stOtaFlag.upgrade_flag);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.target_app: %lu \n", (unsigned long)stOtaFlag.target_app);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.len: %lu \n", (unsigned long)stOtaFlag.len);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.crc32: 0x%08lx \n", (unsigned long)stOtaFlag.crc32);
+    BOOTL_PRINT(BOOT_INFO"stOtaFlag.magic: 0x%08lx \n", (unsigned long)stOtaFlag.magic);
 
-    /* 没有待处理的升级任务 */
-    if(!((0 < stOtaFlag.len && stOtaFlag.len < APP_FLASH_SIZE) && stOtaFlag.upgrade_flag))
+    /* 严格条件：magic + pending + 合法长度（拒绝 Flash 擦除后的 0xFF） */
+    if (!(stOtaFlag.magic == OTA_FLAG_MAGIC &&
+          stOtaFlag.upgrade_flag == OTA_FLAG_UPGRADE_PENDING &&
+          stOtaFlag.len > 0u && stOtaFlag.len <= APP_FLASH_SIZE))
     {
+        BOOTL_PRINT(BOOT_INFO"no pending OTA (magic=0x%08lx flag=%lu len=%lu)\n",
+                    (unsigned long)stOtaFlag.magic,
+                    (unsigned long)stOtaFlag.upgrade_flag,
+                    (unsigned long)stOtaFlag.len);
         return 0;
     }
 
-    BOOTL_PRINT(BOOT_INFO"FW size: %d crc:0x%08x\n",  stOtaFlag.len, stOtaFlag.crc32);
+    LED_YELLOW;
 
-    /* 为升级包申请空间 */
-    pbyFwFile = (uint8 *)malloc(stOtaFlag.len);
-    if(NULL == pbyFwFile)
-    {
-        BOOTL_PRINT(BOOT_ERROR"[%s:%d]gs_byUserFile malloc failed !\n",__FUNCTION__,__LINE__);
+    if (pSrcStorage == &g_stSpiFlashPart &&
+        stOtaFlag.target_app >= pSrcStorage->byPartNum) {
+        BOOTL_PRINT(BOOT_ERROR"invalid target_app=%lu (spi parts=%u)\n",
+                    (unsigned long)stOtaFlag.target_app,
+                    pSrcStorage->byPartNum);
+        goto exit;
     }
-    memset(pbyFwFile, 0, stOtaFlag.len);
+
+    BOOTL_PRINT(BOOT_INFO"FW size: %lu crc:0x%08lx\n",
+                (unsigned long)stOtaFlag.len, (unsigned long)stOtaFlag.crc32);
+
+    pbyFwFile = (uint8 *)malloc(stOtaFlag.len);
+    if (NULL == pbyFwFile)
+    {
+        BOOTL_PRINT(BOOT_ERROR"[%s:%d] malloc(%lu) failed, keep OTA flag for retry\n",
+                    __FUNCTION__, __LINE__, (unsigned long)stOtaFlag.len);
+        goto exit;
+    }
+
+    dwInfoStartAddr = pInfoStorage->pPartInfo[byInfoPart].start_addr;
 
 #if (OTA_MODE == MAIN_APP)
-    /* 获取升级固件所在区域 */
-    byOtaRegion = stOtaFlag.target_app;
+    byOtaRegion = (uint8_t)stOtaFlag.target_app;
 
     pSrcStorage->stPartOps.partition_read(pSrcStorage, byOtaRegion, 0, pbyFwFile, stOtaFlag.len);
     dwFwCrc32 = crc32_checksum(pbyFwFile, stOtaFlag.len);
-    if(stOtaFlag.crc32 != dwFwCrc32)
+    if (stOtaFlag.crc32 != dwFwCrc32)
     {
-        BOOTL_PRINT(BOOT_ERROR"[%s:%d]crc check err dwFwCrc32:%08x!\n",__FUNCTION__,__LINE__,dwFwCrc32);
+        BOOTL_PRINT(BOOT_ERROR"src crc err expect=0x%08lx got=0x%08lx, clear OTA\n",
+                    (unsigned long)stOtaFlag.crc32, (unsigned long)dwFwCrc32);
+        /* 源已坏：清标志避免每次开机死循环搬运 */
+        ota_flag_clear(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoEraseSize);
+        free(pbyFwFile);
+        LED_RED;
+        return 0;
     }
-    else
+    BOOTL_PRINT(BOOT_INFO"fw crc check success!\n");
+
+    /* 固件已在运行区：只清标志 */
+    if (byShortcutSrcPart == byOtaRegion)
     {
-        BOOTL_PRINT(BOOT_INFO"fw crc check success!\n");
-        dwInfoStartAddr = pInfoStorage->pPartInfo[byInfoPart].start_addr;
+        ota_flag_clear(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoEraseSize);
+        free(pbyFwFile);
+        LED_GREEN;
+        return 0;
+    }
 
-        /* 如果固件源本来就在目标分区(PART_FW1)上, 则不需要搬运直接跳转(小概率) */
-        if(byShortcutSrcPart == byOtaRegion)
-        {
-            /* TODO 清空OTA信息区 */
-            pInfoStorage->stPartOps.partition_erase(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoStartAddr + dwInfoEraseSize);
-            goto exit;
-        }
+    /*
+     * 关键：先写 APP1，校验通过后再清 OTA。
+     * 写到一半掉电 → APP1 可能损坏，但 SPI 源+标志仍在，下次开机重试。
+     */
+    BOOTL_PRINT(BOOT_INFO"Downloading (power-fail safe):\n");
+    LED_BLUE;
 
-        if(bEraseInfoBeforeWrite)
-        {
-            pInfoStorage->stPartOps.partition_erase(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoStartAddr + dwInfoEraseSize);
-        }
+    INTERNAL_FLASH_WRITE(PART_FW1, pbyFwFile, stOtaFlag.len);
+    *pCurrentAppAddr = APP1_ADDRESS;
 
-        BOOTL_PRINT(BOOT_INFO"Downloading: \n");
+    memset(pbyFwFile, 0, stOtaFlag.len);
+    INTERNAL_FLASH_READ(PART_FW1, 0, pbyFwFile, stOtaFlag.len);
+    dwFwCrc32 = crc32_checksum(pbyFwFile, stOtaFlag.len);
 
-        /* 写入新固件 */
-        INTERNAL_FLASH_WRITE(PART_FW1, pbyFwFile, stOtaFlag.len);
-
-        if(!bEraseInfoBeforeWrite)
-        {
-            /* 清空升级控制信息区 */
-            pInfoStorage->stPartOps.partition_erase(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoStartAddr + dwInfoEraseSize);
-        }
-
-        /* 写入固件后再次校验 */
-        memset(pbyFwFile, 0, stOtaFlag.len);
-        INTERNAL_FLASH_READ(PART_FW1, 0, pbyFwFile, stOtaFlag.len);
-        dwFwCrc32 = crc32_checksum(pbyFwFile, stOtaFlag.len);
-        /* 写入的固件数据异常, 跳转到APP2, 并标记相关信息, 避免下次升级写到运行的固件分区 */
-        if(stOtaFlag.crc32 != dwFwCrc32)
-        {
-            BOOTL_PRINT(BOOT_ERROR"[%s:%d] crc check err!\n",__FUNCTION__,__LINE__);
+    if (stOtaFlag.crc32 != dwFwCrc32 || !app_image_valid(APP1_ADDRESS))
+    {
+        BOOTL_PRINT(BOOT_ERROR"APP1 verify fail crc=0x%08lx valid=%u — KEEP OTA for retry\n",
+                    (unsigned long)dwFwCrc32,
+                    (unsigned)app_image_valid(APP1_ADDRESS));
+        LED_RED;
+        /* 不清除 SPI OTA：下次复位继续搬运。若 APP2 可用则暂跳 APP2 */
+        if (app_image_valid(APP2_ADDRESS)) {
             *pCurrentAppAddr = APP2_ADDRESS;
-            /* 标记接下来运行在APP2 */
-            stOtaFlag.active_app = 1;
-            stOtaFlag.crc32 = 0;
-            stOtaFlag.len = 0;
-            stOtaFlag.upgrade_flag = 0;
-            pInfoStorage->stPartOps.partition_write(pInfoStorage, byInfoPart, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t));
+            BOOTL_PRINT(BOOT_WARN"temp boot APP2 until OTA retry succeeds\n");
+        }
+        free(pbyFwFile);
+        return 0;
+    }
+
+    /* 成功：现在才清标志 */
+    ota_flag_clear(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoEraseSize);
+    BOOTL_PRINT(BOOT_INFO"APP1 image OK, OTA cleared, boot -> 0x%08lx\n",
+                (unsigned long)APP1_ADDRESS);
+    LED_GREEN;
+#endif
+
+#if (OTA_MODE == DUAL_APP)
+    {
+        uint8_t cur = (stOtaFlag.active_app == 1U) ? 1U : 0U;
+        uint8_t nxt = cur ? 0U : 1U;
+        uint8_t dst_part = nxt ? PART_FW2 : PART_FW1;
+        uint32_t dst_addr = nxt ? APP2_ADDRESS : APP1_ADDRESS;
+
+        byOtaRegion = (uint8_t)stOtaFlag.target_app;
+        pSrcStorage->stPartOps.partition_read(pSrcStorage, byOtaRegion, 0, pbyFwFile, stOtaFlag.len);
+        dwFwCrc32 = crc32_checksum(pbyFwFile, stOtaFlag.len);
+        if (stOtaFlag.crc32 != dwFwCrc32) {
+            BOOTL_PRINT(BOOT_ERROR"DUAL_APP src crc err, clear OTA\n");
+            ota_flag_clear(pInfoStorage, byInfoPart, dwInfoStartAddr, dwInfoEraseSize);
+            LED_RED;
+        } else {
+            uint32_t dest_crc;
+
+            BOOTL_PRINT(BOOT_INFO"DUAL_APP write inactive APP%u @0x%08lx (keep APP%u)\n",
+                        (unsigned)(nxt + 1U), (unsigned long)dst_addr,
+                        (unsigned)(cur + 1U));
+
+            /* 目标槽已是同一镜像（上次已搬完但标志没清干净，或 pyocd 刚烧了同一份）→ 不再擦写 */
+            INTERNAL_FLASH_READ(dst_part, 0, pbyFwFile, stOtaFlag.len);
+            dest_crc = crc32_checksum(pbyFwFile, stOtaFlag.len);
+            if (dest_crc == stOtaFlag.crc32 && app_image_valid(dst_addr)) {
+                BOOTL_PRINT(BOOT_INFO"DUAL_APP dest already matches, skip copy\n");
+                (void)ota_flag_commit_done(nxt);
+                *pCurrentAppAddr = dst_addr;
+                LED_GREEN;
+            } else {
+                pSrcStorage->stPartOps.partition_read(pSrcStorage, byOtaRegion, 0, pbyFwFile, stOtaFlag.len);
+                LED_BLUE;
+                /* 只写空闲槽；写中途掉电 → 旧槽仍可启动，标志保留可重试 */
+                INTERNAL_FLASH_WRITE(dst_part, pbyFwFile, stOtaFlag.len);
+
+                memset(pbyFwFile, 0, stOtaFlag.len);
+                INTERNAL_FLASH_READ(dst_part, 0, pbyFwFile, stOtaFlag.len);
+                dwFwCrc32 = crc32_checksum(pbyFwFile, stOtaFlag.len);
+
+                if (stOtaFlag.crc32 != dwFwCrc32 || !app_image_valid(dst_addr)) {
+                    BOOTL_PRINT(BOOT_ERROR"DUAL_APP verify fail @0x%08lx crc=0x%08lx — KEEP OTA\n",
+                                (unsigned long)dst_addr, (unsigned long)dwFwCrc32);
+                    LED_RED;
+                    *pCurrentAppAddr = cur ? APP2_ADDRESS : APP1_ADDRESS;
+                } else {
+                    if (ota_flag_commit_done(nxt) != 0) {
+                        LED_RED;
+                        *pCurrentAppAddr = dst_addr;
+                    } else {
+                        *pCurrentAppAddr = dst_addr;
+                        BOOTL_PRINT(BOOT_INFO"DUAL_APP switch -> APP%u @0x%08lx\n",
+                                    (unsigned)(nxt + 1U), (unsigned long)dst_addr);
+                        LED_GREEN;
+                    }
+                }
+            }
         }
     }
-#endif
-#if (OTA_MODE == DUAL_APP)
-    /* TODO */
 #endif
 
     free(pbyFwFile);
     return 0;
 
 exit:
-    if(pbyFwFile)
+    LED_RED;
+    if (pbyFwFile)
     {
         free(pbyFwFile);
     }
@@ -485,6 +635,10 @@ int main()
     /* 初始化串口 */
     Debug_USART_Config();
 
+    /* RGB LED：OTA 时闪蓝，成功绿 / 失败红 */
+    LED_GPIO_Config();
+    LED_RGBOFF;
+
     show_boot_info();
 
     /* 16M串行flash W25Q128初始化 */
@@ -503,11 +657,36 @@ int main()
     internal_flash_region_init();
 
 #if OTA_REGION_SPI_FLASH
-    fw_upgrade_v2(&dwCurrentAppAddr);
+    if (!ota_apply_host_flash_override(&dwCurrentAppAddr)) {
+        fw_upgrade_v2(&dwCurrentAppAddr);
+    }
 #else
     fw_upgrade(&dwCurrentAppAddr);
 #endif
-    /* 可打断：按 U/u 或回车进入 CLI；超时则倒计时，到 0 跳 APP */
+    /* 升级流程可能已指定 fail-over 地址；再按 active_app + 镜像校验做最终选择 */
+    {
+        uint32_t resolved = boot_resolve_app_addr();
+        if (s_host_flash_override && app_image_valid(dwCurrentAppAddr)) {
+            /* pyocd 直烧：保持刚指定的槽，忽略 SPI 里残留的 active_app */
+        } else if (!(dwCurrentAppAddr == APP2_ADDRESS && app_image_valid(APP2_ADDRESS))) {
+            dwCurrentAppAddr = resolved;
+        }
+        BOOTL_PRINT(BOOT_REPORT"will jump to 0x%08lx\n", (unsigned long)dwCurrentAppAddr);
+    }
+
+    /* 无合法 APP：留在 boot CLI，避免跳进损坏镜像 */
+    if (!app_image_valid(dwCurrentAppAddr)) {
+        BOOTL_PRINT(BOOT_ERROR"no valid APP image, stay in bootloader CLI\n");
+        LED_RED;
+        mini_cli_loop();
+        /* CLI 里 goto/reset 可能改地址；再试一次 */
+        if (!app_image_valid(dwCurrentAppAddr)) {
+            while (1) {
+                DelayMs(1000);
+            }
+        }
+    }
+
     while(1)
     {
         __os_printf("\rPress \"U\" or \"u\" to stay in bootloader %d...", boot_count);

@@ -766,7 +766,7 @@ static err_t telnet_accept_callback(void *arg, struct tcp_pcb *new_pcb, err_t er
         os_free(session);
         return ERR_MEM;
     }
-    printf("1111111111111111111111111111\n");
+
     /* 需要找到空闲的写入, 避免覆盖其他连接 */
     add_connection(new_pcb);
 

@@ -29,8 +29,8 @@
 
 static __IO uint32_t  SPITimeout = SPIT_LONG_TIMEOUT;
 static uint8_t s_spi_dma_dummy = Dummy_Byte;
-/* DMA ÏÈÂäµ½ÄÚ²¿ SRAM£¬ÔÙ memcpy µ½ PSRAM£»Ö±½Ó DMA Ð´ FSMC ÍùÍù¸üÂý */
-static uint8_t s_spi_dma_bounce[4096];
+/* DMA ï¿½ï¿½ï¿½äµ½ï¿½Ú²ï¿½ SRAMï¿½ï¿½ï¿½ï¿½ memcpy ï¿½ï¿½ PSRAMï¿½ï¿½Ö±ï¿½ï¿½ DMA Ð´ FSMC ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
+static uint8_t s_spi_dma_bounce[4096] __attribute__((unused));
 
 static uint16_t SPI_TIMEOUT_UserCallback(uint8_t errorCode);
 static void SPI_FLASH_DMA_Init(void);
@@ -735,7 +735,7 @@ void SPI_Flash_WAKEUP(void)
 static  uint16_t SPI_TIMEOUT_UserCallback(uint8_t errorCode)
 {
   /* ????????????,?????????? */
-  FLASH_ERROR("SPI ??????!errorCode = %d",errorCode);
+  FLASH_ERROR("SPI timeout, errorCode = %d",errorCode);
   return 0;
 }
 

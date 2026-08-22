@@ -134,11 +134,6 @@ typedef struct
 } PartitionHeader;
 
 
-#define HW_READ(a, b, c)    (self->stPartOps.hw_ops->hw_read(a, b, c))
-#define HW_WRITE(a, b, c)   (self->stPartOps.hw_ops->hw_write(a, b, c))
-#define HW_ERASE(a)         (self->stPartOps.hw_ops->hw_erase(a))
-//#define HW_ERASE(a)         (self->stPartOps.hw_ops->hw_erase?self->stPartOps.hw_ops->hw_erase(a):(void)a)
-
 #define HW_READ(a, b, c)                         \
 do {                                             \
     os_mutex_lock(self->storage_mutex);          \

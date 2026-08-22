@@ -77,9 +77,14 @@ typedef struct {
 //}PARAM_NODE_T, *PARAM_NODE_PTR; 
 
 
+#define WIFI_SSID_MAX  32
+#define WIFI_PSK_MAX   63
+
 typedef struct {
     uint8_t byDebugLevel;
     uint8_t byRes[3];
+    char wifiSsid[WIFI_SSID_MAX + 1];
+    char wifiPsk[WIFI_PSK_MAX + 1];
 }DEVINFO_PARAM_T, *DEVINFO_PARAM_PTR;
 
 
@@ -130,6 +135,8 @@ void devParamSaveNow();
 
 int getDevInfoParam(DEVINFO_PARAM_PTR pStDevParam);
 int setDevInfoParam(DEVINFO_PARAM_PTR pStDevParam);
+int getWifiStaParam(char *ssid, uint32_t ssid_len, char *psk, uint32_t psk_len);
+int setWifiStaParam(const char *ssid, const char *psk);
 
 
 #endif /* __DEV_CONFIG_H__ */

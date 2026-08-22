@@ -12,15 +12,15 @@
   *          is using in the C source code, usually in main.c. This file contains:
   *           - Configuration section that allows to select:
   *              - The device used in the target application
-  *              - To use or not the peripheral’s drivers in application code(i.e. 
-  *                code will be based on direct access to peripheral’s registers 
+  *              - To use or not the peripheralï¿½s drivers in application code(i.e. 
+  *                code will be based on direct access to peripheralï¿½s registers 
   *                rather than drivers API), this option is controlled by 
   *                "#define USE_STDPERIPH_DRIVER"
   *              - To change few application-specific parameters such as the HSE 
   *                crystal frequency
   *           - Data structures and the address mapping for all peripherals
   *           - Peripherals registers declarations and bits definition
-  *           - Macros to access peripheral’s registers hardware
+  *           - Macros to access peripheralï¿½s registers hardware
   *  
   ******************************************************************************
   * @attention
@@ -2033,8 +2033,8 @@ typedef struct
 /** @addtogroup Peripheral_memory_map
   * @{
   */
-#define APP_DATA_BASE         ((uint32_t)0x08008000) /* added by ldy */
-#define APP_DATA_BASE1        ((uint32_t)0x08061000) /* added by ldy */
+#define APP_DATA_BASE         ((uint32_t)0x08008000) /* APP1 ???? */
+#define APP_DATA_BASE1        ((uint32_t)0x08060000) /* APP2 ?????? APP2_ADDRESS ??? */
 
 #define FLASH_BASE            ((uint32_t)0x08000000) /*!< FLASH(up to 1 MB) base address in the alias region                         */
 #define CCMDATARAM_BASE       ((uint32_t)0x10000000) /*!< CCM(core coupled memory) data RAM(64 KB) base address in the alias region  */

@@ -44,13 +44,13 @@ typedef u32_t mem_ptr_t;
 typedef int sys_prot_t;
 
 
-#define U16_F "hu"
+#define U16_F "u"
 #define S16_F "d"
-#define X16_F "hx"
-#define U32_F "u"
-#define S32_F "d"
-#define X32_F "x"
-#define SZT_F "uz" 
+#define X16_F "x"
+#define U32_F "lu"
+#define S32_F "ld"
+#define X32_F "lx"
+#define SZT_F "u" 
 
 
 

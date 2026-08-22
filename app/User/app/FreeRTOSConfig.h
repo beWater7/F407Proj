@@ -48,7 +48,7 @@
 #define configUSE_TICKLESS_IDLE                    0
 #define configMAX_PRIORITIES                       8U
 #define configMINIMAL_STACK_SIZE                   128U
-#define configMAX_TASK_NAME_LEN                    4U
+#define configMAX_TASK_NAME_LEN                    16U
 #define configTICK_TYPE_WIDTH_IN_BITS              TICK_TYPE_WIDTH_32_BITS
 #define configIDLE_SHOULD_YIELD                    1
 #define configTASK_NOTIFICATION_ARRAY_ENTRIES      1U
@@ -65,7 +65,7 @@
 
 #define configUSE_TIMERS                1
 #define configTIMER_TASK_PRIORITY       ( configMAX_PRIORITIES - 1U )
-#define configTIMER_TASK_STACK_DEPTH    configMINIMAL_STACK_SIZE
+#define configTIMER_TASK_STACK_DEPTH    256U
 #define configTIMER_QUEUE_LENGTH        10U
 
 /******************************************************************************/
@@ -104,11 +104,11 @@
 /* Hook and callback function related definitions. ****************************/
 /******************************************************************************/
 
-#define configUSE_IDLE_HOOK                   0
+#define configUSE_IDLE_HOOK                   1
 #define configUSE_TICK_HOOK                   0
-#define configUSE_MALLOC_FAILED_HOOK          0
+#define configUSE_MALLOC_FAILED_HOOK          1
 #define configUSE_DAEMON_TASK_STARTUP_HOOK    0
-#define configCHECK_FOR_STACK_OVERFLOW        0
+#define configCHECK_FOR_STACK_OVERFLOW        2
 
 /******************************************************************************/
 /* Run time and task stats gathering related definitions. *********************/
@@ -148,32 +148,30 @@
 #define INCLUDE_xTaskResumeFromISR             1
 
 
-/* configGENERATE_RUN_TIME_STATS 需要定义以下宏 */
-
-/* 初始化和启动 用于统计的定时器 */
+/* configGENERATE_RUN_TIME_STATS 需要定义以下宏
+ *
+ * FreeRTOS 把 portGET_RUN_TIME_COUNTER_VALUE() 当作单调递增的绝对时间基。
+ * 以前 Period=999，计数只在 0~999 回绕，uxTaskGetSystemState 的 totalRunTime
+ * 永远 <1000，导致 getCpuUsage() 只能算出 0% 或 100%。
+ *
+ * TIM2 在 F407 上是 32 位：设为自由运行（Period=0xFFFFFFFF）。
+ * APB1=42MHz 时 TIM2CLK=84MHz；Prescaler=8399 → 10kHz，约 119 小时回绕一次。
+ */
 #define portCONFIGURE_TIMER_FOR_RUN_TIME_STATS()          \
 do{                                                       \
 	TIM_TimeBaseInitTypeDef TIM_TimeBaseInitStructure;    \
-	NVIC_InitTypeDef NVIC_InitStructure;                  \
-	/* 使能TIM2时钟 */                                        \
-	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2,ENABLE);   \
-	/* 定时器分频 */                                           \
-	TIM_TimeBaseInitStructure.TIM_Prescaler= 8;         \
-    /* 向上计数模式 */                                          \
-	TIM_TimeBaseInitStructure.TIM_CounterMode=TIM_CounterMode_Up; \
-    /* 自动重装载值 */                                         \
-	TIM_TimeBaseInitStructure.TIM_Period= 999;           \
-	TIM_TimeBaseInitStructure.TIM_ClockDivision=TIM_CKD_DIV1;   \
-	                                                      \
-	TIM_TimeBaseInit(TIM2,&TIM_TimeBaseInitStructure);    \
-	/* 使能定时器2 */                                          \
-	TIM_Cmd(TIM2,ENABLE);                                 \
+	RCC_APB1PeriphClockCmd(RCC_APB1Periph_TIM2, ENABLE);   \
+	TIM_TimeBaseInitStructure.TIM_Prescaler = 8399;       \
+	TIM_TimeBaseInitStructure.TIM_CounterMode = TIM_CounterMode_Up; \
+	TIM_TimeBaseInitStructure.TIM_Period = 0xFFFFFFFF;    \
+	TIM_TimeBaseInitStructure.TIM_ClockDivision = TIM_CKD_DIV1; \
+	TIM_TimeBaseInitStructure.TIM_RepetitionCounter = 0;  \
+	TIM_TimeBaseInit(TIM2, &TIM_TimeBaseInitStructure);    \
+	TIM_SetCounter(TIM2, 0);                              \
+	TIM_Cmd(TIM2, ENABLE);                                \
 }while(0)
 
-
-/* 获取硬件定时器的值 替换 */
-#define portALT_GET_RUN_TIME_COUNTER_VALUE(x) (x = TIM_GetCounter(TIM2))
-/* 获取硬件定时器的值 */
+#define portALT_GET_RUN_TIME_COUNTER_VALUE(x) do { (x) = TIM_GetCounter(TIM2); } while (0)
 #define portGET_RUN_TIME_COUNTER_VALUE() (TIM_GetCounter(TIM2))
 
 

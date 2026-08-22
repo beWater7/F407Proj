@@ -2,15 +2,13 @@
 """
 genUpgBin.py — 生成 OTA 组合固件 upg.bin
 
-布局（与 app/User/h/app/upgrade/upgrade.h、post.c 一致）::
+单槽布局（magic=0x55475021）::
 
-    ┌──────────────────────────────┐
-    │ struct upg_header (16 bytes) │  magic | fw_len | web_len | crc
-    ├──────────────────────────────┤
-    │ APP 固件 (app.bin)           │
-    ├──────────────────────────────┤
-    │ web.bin（打包网页资源）       │
-    └──────────────────────────────┘
+    [upg_header 16B][APP][web.bin]
+
+双槽布局（magic=0x55475022，默认）::
+
+    [upg_header_dual 20B][APP1@0x08008000][APP2@0x08060000][web.bin]
 
 web.bin 布局（与 fs.c parse_web_bin / genWebBin.py 一致）::
 
@@ -24,13 +22,16 @@ web.bin 布局（与 fs.c parse_web_bin / genWebBin.py 一致）::
 from __future__ import annotations
 
 import argparse
+import gzip
+import io
 import struct
 import sys
 import zlib
 from pathlib import Path
 
-# 与 upgrade.h: UPG_HDR_MAGIC / WEB_FILE_TYPE 保持一致
+# 与 upgrade.h: UPG_HDR_MAGIC / UPG_HDR_MAGIC_DUAL / WEB_FILE_TYPE 保持一致
 UPG_HDR_MAGIC = 0x55475021  # "UGP!"
+UPG_HDR_MAGIC_DUAL = 0x55475022
 
 WEB_HTML = 0
 WEB_CSS = 1
@@ -65,11 +66,34 @@ WEB_RESOURCES = [
 MAX_FILES = 16
 
 
+def gzip_bytes(raw: bytes) -> bytes:
+    buf = io.BytesIO()
+    with gzip.GzipFile(fileobj=buf, mode="wb", mtime=0, compresslevel=9) as zf:
+        zf.write(raw)
+    return buf.getvalue()
+
+
 def resolve_file(web_dir: Path, candidates: list[str]) -> Path:
+    gz_path = None
+    raw_path = None
     for name in candidates:
         p = web_dir / name
-        if p.is_file():
-            return p
+        if not p.is_file():
+            continue
+        if name.endswith(".gz"):
+            if gz_path is None:
+                gz_path = p
+        elif raw_path is None:
+            raw_path = p
+    if raw_path is not None and gz_path is not None:
+        if raw_path.stat().st_mtime >= gz_path.stat().st_mtime:
+            gz_path.write_bytes(gzip_bytes(raw_path.read_bytes()))
+            print(f"[+] refresh gzip {gz_path.name} <- {raw_path.name}")
+        return gz_path
+    if gz_path is not None:
+        return gz_path
+    if raw_path is not None:
+        return raw_path
     raise FileNotFoundError(
         f"在 {web_dir} 中找不到任一候选: {', '.join(candidates)}"
     )
@@ -113,8 +137,8 @@ def pack_web_bin(web_dir: Path) -> bytes:
     return bytes(out)
 
 
-def build_upg(fw_data: bytes, web_data: bytes) -> tuple[bytes, bytes]:
-    """返回 (header, upg_blob)。"""
+def build_upg_single(fw_data: bytes, web_data: bytes) -> tuple[bytes, bytes]:
+    """返回 (header, upg_blob) — 单槽。"""
     fw_len = len(fw_data)
     web_len = len(web_data)
     crc_val = zlib.crc32(fw_data + web_data) & 0xFFFFFFFF
@@ -122,16 +146,45 @@ def build_upg(fw_data: bytes, web_data: bytes) -> tuple[bytes, bytes]:
     return header, header + fw_data + web_data
 
 
+def build_upg_dual(fw1: bytes, fw2: bytes, web_data: bytes) -> tuple[bytes, bytes]:
+    """返回 (header, upg_blob) — 双槽。"""
+    fw1_len = len(fw1)
+    fw2_len = len(fw2)
+    web_len = len(web_data)
+    crc_val = zlib.crc32(fw1 + fw2 + web_data) & 0xFFFFFFFF
+    header = struct.pack(
+        "<IIIII", UPG_HDR_MAGIC_DUAL, fw1_len, fw2_len, web_len, crc_val
+    )
+    return header, header + fw1 + fw2 + web_data
+
+
 def parse_args() -> argparse.Namespace:
     root = Path(__file__).resolve().parent
     p = argparse.ArgumentParser(
-        description="生成 OTA 组合固件 upg.bin（header + APP + web）"
+        description="生成 OTA 组合固件 upg.bin（单槽或无感双槽）"
     )
     p.add_argument(
         "--fw",
         type=Path,
-        default=root / "app" / "build" / "app.bin",
-        help="APP 固件路径（默认 app/build/app.bin）",
+        default=None,
+        help="单槽 APP 固件（与 --fw1/--fw2 互斥）",
+    )
+    p.add_argument(
+        "--fw1",
+        type=Path,
+        default=root / "app" / "build" / "app1.bin",
+        help="APP1 镜像（ORIGIN=0x08008000，默认 app/build/app1.bin）",
+    )
+    p.add_argument(
+        "--fw2",
+        type=Path,
+        default=root / "app" / "build" / "app2.bin",
+        help="APP2 镜像（ORIGIN=0x08060000，默认 app/build/app2.bin）",
+    )
+    p.add_argument(
+        "--single",
+        action="store_true",
+        help="强制单槽格式（需 --fw；默认双槽）",
     )
     p.add_argument(
         "--web-dir",
@@ -169,15 +222,6 @@ def main() -> int:
     out_dir: Path = args.out_dir
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    fw_path: Path = args.fw
-    if not fw_path.is_file():
-        print(f"错误: 找不到 APP 固件: {fw_path}", file=sys.stderr)
-        print("  请先编译 APP，或用 --fw 指定路径", file=sys.stderr)
-        return 1
-
-    fw_data = fw_path.read_bytes()
-    print(f"[+] fw: {fw_path} ({len(fw_data)} bytes)")
-
     web_out = out_dir / "web.bin"
     if args.web_bin is not None:
         src = args.web_bin
@@ -200,23 +244,57 @@ def main() -> int:
         web_out.write_bytes(web_data)
         print(f"[+] 写入 {web_out}")
 
-    header, upg = build_upg(fw_data, web_data)
-    magic, fw_len, web_len, crc_val = struct.unpack("<IIII", header)
+    use_single = args.single or (args.fw is not None)
+    if use_single:
+        fw_path = args.fw if args.fw is not None else (out_dir / "app" / "build" / "app.bin")
+        # 兼容：未传 --fw 时尝试旧路径
+        if args.fw is None:
+            cand = Path(__file__).resolve().parent / "app" / "build" / "app.bin"
+            fw_path = cand
+        if not fw_path.is_file():
+            print(f"错误: 找不到 APP 固件: {fw_path}", file=sys.stderr)
+            return 1
+        fw_data = fw_path.read_bytes()
+        print(f"[+] fw: {fw_path} ({len(fw_data)} bytes)")
+        header, upg = build_upg_single(fw_data, web_data)
+        magic, fw_len, web_len, crc_val = struct.unpack("<IIII", header)
+        print(
+            f"[+] header.bin: magic=0x{magic:08X} fw_len={fw_len} "
+            f"web_len={web_len} crc=0x{crc_val:08X}"
+        )
+        fmt_note = f"[{len(header)}B hdr][APP][web] = {len(upg)} bytes"
+    else:
+        fw1_path: Path = args.fw1
+        fw2_path: Path = args.fw2
+        if not fw1_path.is_file():
+            print(f"错误: 找不到 APP1: {fw1_path}", file=sys.stderr)
+            print("  请先 make（生成 app1.bin / app2.bin）", file=sys.stderr)
+            return 1
+        if not fw2_path.is_file():
+            print(f"错误: 找不到 APP2: {fw2_path}", file=sys.stderr)
+            return 1
+        fw1 = fw1_path.read_bytes()
+        fw2 = fw2_path.read_bytes()
+        print(f"[+] fw1: {fw1_path} ({len(fw1)} bytes) @ 0x08008000")
+        print(f"[+] fw2: {fw2_path} ({len(fw2)} bytes) @ 0x08060000")
+        header, upg = build_upg_dual(fw1, fw2, web_data)
+        magic, fw1_len, fw2_len, web_len, crc_val = struct.unpack("<IIIII", header)
+        print(
+            f"[+] header.bin: magic=0x{magic:08X} fw1={fw1_len} fw2={fw2_len} "
+            f"web={web_len} crc=0x{crc_val:08X}"
+        )
+        fmt_note = (
+            f"[{len(header)}B hdr][APP1][APP2][web] = {len(upg)} bytes "
+            "(seamless A/B)"
+        )
 
     header_file = out_dir / "header.bin"
     header_file.write_bytes(header)
-    print(
-        f"[+] {header_file.name}: magic=0x{magic:08X} fw_len={fw_len} "
-        f"web_len={web_len} crc=0x{crc_val:08X}"
-    )
+    print(f"[+] 写入 {header_file}")
 
     upg_file = out_dir / args.name
     upg_file.write_bytes(upg)
-    print(
-        f"[+] 生成 {upg_file} "
-        f"({len(header)}+{fw_len}+{web_len}={len(upg)} bytes)"
-    )
-    print("    格式: [upg_header 16B][APP][web.bin]  →  HTTP OTA / fw_upgrade 可用")
+    print(f"[+] 生成 {upg_file} {fmt_note}")
     return 0
 
 

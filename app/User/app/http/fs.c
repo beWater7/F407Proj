@@ -38,7 +38,9 @@
 /* added by liuday */
 #include <stdio.h>
 #include "bsp_spi_flash.h"
+#if defined(CONFIG_APP_FATFS)
 #include "ff.h"
+#endif
 #include "malloc.h"
 #include "os_debug.h"
 #include "flash_manage.h"
@@ -70,6 +72,40 @@ static WebFileDesc gs_webFileDesc[] = {
 #define WEB_FILE_DESC_SIZE (sizeof(gs_webFileDesc)/sizeof(gs_webFileDesc[0]))
 
 static WebBinHeader gs_webBinHdr = {0};
+static uint8_t s_spi_web_tried;
+void parse_web_bin(uint8_t *data);
+
+/* 开机或升级后从 SPI 解析 web 头；空分区（0xFF）不解析，回落 ROM */
+static int spi_web_header_ready(void)
+{
+    char buf[CRCCHECKSUMLEN + WEB_BIN_HDR_SIZE];
+    unsigned i;
+    int n;
+
+    if (gs_webBinHdr.file_count != 0) {
+        return 1;
+    }
+    if (s_spi_web_tried) {
+        return 0;
+    }
+    s_spi_web_tried = 1;
+    memset(buf, 0, sizeof(buf));
+    n = SPI_FLASH_READ(PART_WEB, 0, (uint8_t *)buf, sizeof(buf));
+    if (n <= 0) {
+        return 0;
+    }
+    if ((uint8_t)buf[0] == 0xFFu) {
+        return 0;
+    }
+    for (i = 0; i < 8; i++) {
+        char c = buf[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))) {
+            return 0;
+        }
+    }
+    parse_web_bin((uint8_t *)buf + CRCCHECKSUMLEN);
+    return (gs_webBinHdr.file_count != 0) ? 1 : 0;
+}
 
 
 void parse_web_bin(uint8_t* data) 
@@ -139,8 +175,12 @@ int fs_open_custom(struct fs_file *file, const char *name)
     char *pRespData = NULL;
     #endif
     unsigned int dwWebFileCheckSum = 0;
+    (void)dwWebFileCheckSum;
     unsigned int dwWebFileCheckSum2 = 0;
+    (void)dwWebFileCheckSum2;
+    #if WEB_FILE_CRC_CHECK
     char byTmpBuff[CRCCHECKSUMLEN + WEB_BIN_HDR_SIZE] = {0};
+    #endif
     uint8 i = 0;
     uint8 byIndex = 0;
     uint32 dwHttpHdrLen = 0;
@@ -171,24 +211,27 @@ int fs_open_custom(struct fs_file *file, const char *name)
     }
     file->fileIndex = byIndex;
 
-    /* 升级后首访：先解析索引，再按实际文件大小申请，避免固定 384KB 导致堆碎片/并发失败 */
-    if(getWebUpgrade())
-    {
-        SPI_FLASH_READ(PART_WEB, 0, byTmpBuff, sizeof(byTmpBuff));
-        parse_web_bin(byTmpBuff + CRCCHECKSUMLEN);
-        memset(byTmpBuff, 0, sizeof(byTmpBuff));
+    /* 升级后强制重解析；开机也尝试加载 SPI，避免只剩 ROM 保底页、没有 Wi-Fi 入口 */
+    if (getWebUpgrade()) {
+        s_spi_web_tried = 0;
+        gs_webBinHdr.file_count = 0;
         setWebUpgrade(0);
     }
+    (void)spi_web_header_ready();
 
     if (0 == gs_webBinHdr.file_count || byIndex >= gs_webBinHdr.file_count) {
-        os_debug("web header not ready (count=%u idx=%u)\n",
-                 (unsigned)gs_webBinHdr.file_count, (unsigned)byIndex);
+        /* SPI web 未就绪：fs_open() 回落到片内 fsdata ROM */
         return 0;
     }
 
     {
         uint32_t file_size = gs_webBinHdr.files[byIndex].size;
         uint32_t need;
+
+        if (ota_heap_busy()) {
+            os_debug("OTA busy: skip open %s (save heap)\n", name);
+            return 0;
+        }
 
         if (0 == file_size || file_size > HTTPD_WEB_FILE_LEN) {
             os_debug("bad web file size %lu for %s\n",
@@ -213,6 +256,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
     SPI_FLASH_READ(PART_WEB, 0, byTmpBuff, CRCCHECKSUMLEN - 1);
     sscanf(byTmpBuff, "%x", &dwWebFileCheckSum);
     dwWebFileCheckSum2 = crc32_checksum(ReadBuffer+CRCCHECKSUMLEN, dwWebReadLen-CRCCHECKSUMLEN);
+    (void)dwWebFileCheckSum2;
     /* web file crc check */
     if(!(dwWebFileCheckSum && dwWebFileCheckSum == dwWebFileCheckSum2))
     {
@@ -258,7 +302,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
      */
     dwWebReadLen = SPI_FLASH_READ(PART_WEB, 
                     CRCCHECKSUMLEN + gs_webBinHdr.files[byIndex].offset, 
-                    ReadBuffer + dwHttpHdrLen, 
+                    (uint8_t *)(ReadBuffer + dwHttpHdrLen), 
                     gs_webBinHdr.files[byIndex].size);
 
     //PartitionRead(uint8_t index, uint32_t offset, uint8_t* data, uint32_t len, uint8_t id)

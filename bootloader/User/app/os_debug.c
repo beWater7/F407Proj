@@ -208,7 +208,7 @@ NEXT:
 
     /* 获取格式化字符串, 保存到buff */
     va_start(args, format);
-    byTmpLen = vsnprintf(__print_buf__ + byBuffLen, LINELENTH, format, args);
+    byTmpLen = vsnprintf((char *)__print_buf__ + byBuffLen, LINELENTH, format, args);
     va_end(args);
 
     /* 更新长度 */
@@ -362,7 +362,7 @@ NEXT:
 
     /* 获取格式化字符串, 保存到buff */
     va_start(args, format);
-    byTmpLen = vsnprintf(byTmpBuff + byBuffLen, len, format, args);
+    byTmpLen = vsnprintf((char *)byTmpBuff + byBuffLen, len, format, args);
     va_end(args);
 
     /* 更新长度 */

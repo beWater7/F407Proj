@@ -119,7 +119,7 @@ unsigned int crc(const struct CRC_INFO *info, const unsigned char *ptr, unsigned
         // value = table[value ^ *ptr++];
         if (info->width > 8) {
             while (len--) {
-                value = (value >> 8) ^ table[value & 0xff ^ *ptr++];
+                value = (value >> 8) ^ table[(value & 0xff) ^ *ptr++];
             }
         }
         else while (len--) {

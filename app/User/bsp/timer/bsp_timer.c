@@ -1,5 +1,7 @@
 #include "stm32f4xx.h"
+#if defined(CONFIG_APP_MULTIBUTTON)
 #include "multi_button.h"
+#endif
 
 __IO u32 TIM3Delay;
 
@@ -32,7 +34,9 @@ static void Tim3Delay_Decrement(void)
   */
 void TIM3_IRQHandler(void)
 {
+#if defined(CONFIG_APP_MULTIBUTTON)
     button_ticks();
+#endif
     if(TIM_GetITStatus(TIM3,TIM_IT_Update)==SET) //溢出中断
     {
         LocalTime+=10;//10ms增量

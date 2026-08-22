@@ -25,10 +25,12 @@
 
 
 #define FLASH_DEBUG_ON 1
+#ifndef FLASH_DEBUG
 #define FLASH_DEBUG(format, ...) do{\
                                  if(FLASH_DEBUG_ON)\
                                     sram_printf("[%s:%d] " format, __FUNCTION__, __LINE__, ##__VA_ARGS__);\
                                  }while(0)
+#endif
 
 
 #define MAX(a, b) (a > b ? a : b)

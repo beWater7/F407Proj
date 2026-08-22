@@ -138,6 +138,12 @@ extern void cJSON_Minify(char *json);
 #define cJSON_AddNumberToObject(object,name,n)	cJSON_AddItemToObject(object, name, cJSON_CreateNumber(n))
 #define cJSON_AddStringToObject(object,name,s)	cJSON_AddItemToObject(object, name, cJSON_CreateString(s))
 
+/* Compatibility helpers for newer cJSON-style call sites */
+#define cJSON_IsNumber(item)	(((item) != 0) && (((item)->type) & 255) == cJSON_Number)
+#define cJSON_IsString(item)	(((item) != 0) && (((item)->type) & 255) == cJSON_String)
+extern cJSON *cJSON_AddObjectToObject(cJSON *object, const char *name);
+extern int cJSON_PrintPreallocated(cJSON *item, char *buffer, const int length, const int format);
+
 /* When assigning an integer value, it needs to be propagated to valuedouble too. */
 #define cJSON_SetIntValue(object,val)			((object)?(object)->valueint=(object)->valuedouble=(val):(val))
 #define cJSON_SetNumberValue(object,val)		((object)?(object)->valueint=(object)->valuedouble=(val):(val))

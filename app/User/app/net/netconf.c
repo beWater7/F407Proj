@@ -56,7 +56,7 @@ uint32_t LinkTimer = 0;
 uint32_t IPaddress = 0;
 
 #ifdef USE_DHCP
-#include "../LED/bsp_led.h" 
+#include "bsp_led.h"
 uint32_t DHCPfineTimer = 0;
 uint32_t DHCPcoarseTimer = 0;
 __IO uint8_t DHCP_state;

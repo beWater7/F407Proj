@@ -1,7 +1,9 @@
 #include <time.h>
 #include <string.h>
-#include "sntp.h"
 #include "sntp_api.h"
+#if defined(CONFIG_APP_SNTP)
+#include "sntp.h"
+#endif
 
 #include "stm32f4xx.h"
 #include "bsp_rtc.h"
@@ -12,6 +14,7 @@
 
 #define print_log printf
 
+#if defined(CONFIG_APP_SNTP)
 /*!
 * @brief 设置 SNTP 的服务器地址，
 * 		 加入多个 IP 以免某个 IP 获取不了时间
@@ -83,7 +86,7 @@ void sntp_set_time(uint32_t sntp_time)
 	}
 	
 	print_log("sntp_set_time: c00, enter!\n");
-	print_log("sntp_set_time: c01, get time = %u\n", sntp_time);
+	print_log("sntp_set_time: c01, get time = %lu\n", (unsigned long)sntp_time);
 
 	struct tm *time;
 	RTC_TimeTypeDef sTime = {0};
@@ -116,9 +119,10 @@ void sntp_set_time(uint32_t sntp_time)
 	print_log("sntp_set_time: c02, decode time: 20%d-%02d-%02d %d:%d:%d\n", \
 				sDate.RTC_Year, sDate.RTC_Month, sDate.RTC_Date, sTime.RTC_Hours, sTime.RTC_Minutes, sTime.RTC_Seconds);
 	
-	print_log("sntp_set_time: c03, test get = %u\n", get_timestamp());
+	print_log("sntp_set_time: c03, test get = %lu\n", (unsigned long)get_timestamp());
 	print_log("sntp_set_time: c04, set rtc time done\n");
 }
+#endif /* CONFIG_APP_SNTP */
 
 
 static int parse_uptime(char* uptime, struct tm *t)
@@ -242,27 +246,27 @@ void print_timestamp(char *buf)
 
 	if(buf)
 	{
-		snprintf(byTmp, sizeof(byTmp), "20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d  ",       \
+		snprintf(byTmp, sizeof(byTmp), "20%02d-%02d-%02d %02d:%02d:%02d  ",       \
 		stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 		memcpy_s(buf, LOG_PREFIX_LEN, byTmp, strlen(byTmp));
 	}
 	else
 	{
 #if 1
-    // os_printf("sys_time: 20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d\n",  \
+    // os_printf("sys_time: 20%02d-%02d-%02d %02d:%02d:%02d\n",
 	// 		   stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 
-//    os_debug("sys_time: 20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d\n",  \
+//    os_debug("sys_time: 20%02d-%02d-%02d %02d:%02d:%02d\n",
 //           stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 
 //
-//    __os_printf("sys_time: 20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d\n",  \
+//    __os_printf("sys_time: 20%02d-%02d-%02d %02d:%02d:%02d\n",
 //			   stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 //
-//    printf("sys_time: 20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d\n",  \
+//    printf("sys_time: 20%02d-%02d-%02d %02d:%02d:%02d\n",
 //		   stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 //
-//    __os_printf(KERN_WARN"sys_time: 20%0.2d-%0.2d-%0.2d %0.2d:%0.2d:%0.2d\n",  \
+//    __os_printf(KERN_WARN"sys_time: 20%02d-%02d-%02d %02d:%02d:%02d\n",
 //			   stm.tm_year, stm.tm_mon, stm.tm_mday, stm.tm_hour, stm.tm_min, stm.tm_sec);
 #endif
 	}

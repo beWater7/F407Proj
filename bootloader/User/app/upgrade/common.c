@@ -177,7 +177,7 @@ void Ymodem_ProcessData(uint8_t *data, uint16_t len)
     printf("recv: \r\n");
     for (i = 0; i < len; i++)
     {
-        printf("%c ");
+        printf("%c ", data[i]);
         ymodem_rx_buffer[ymodem_rx_tail++] = data[i];
         if (ymodem_rx_tail >= YMODEM_RX_BUFFER_SIZE)
             ymodem_rx_tail = 0;

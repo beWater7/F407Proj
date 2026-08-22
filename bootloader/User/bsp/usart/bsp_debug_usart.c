@@ -195,6 +195,8 @@ void USART1_DMA_Init(void) {
 		/*����ͻ������ 1������*/
 		DMA_InitStruct.DMA_PeripheralBurst = DMA_PeripheralBurst_Single;  
 
+    DMA_Init(DMA2_Stream5, &DMA_InitStruct);
+
     // Enable DMA1 Channel5
     DMA_Cmd(DMA2_Stream5, ENABLE);
 

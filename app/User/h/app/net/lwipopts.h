@@ -212,7 +212,15 @@ a lot of data that needs to be copied, this should be set high. */
    ---------- Lwip Debug options ----------
    ----------------------------------------
 */
-#define LWIP_DEBUG                      0
+/*
+   ----------------------------------------
+   ---------- Lwip Debug options ----------
+   ----------------------------------------
+*/
+/* 不要写成 #define LWIP_DEBUG 0：#ifdef LWIP_DEBUG 仍为真，raw_new/raw_sendto 会 printf */
+#undef LWIP_DEBUG
+#define RAW_DEBUG                       LWIP_DBG_OFF
+#define PING_DEBUG                      LWIP_DBG_OFF
 
 #define LWIP_IPV6  0
 //定义 Lwip SNTP 的 处理函数

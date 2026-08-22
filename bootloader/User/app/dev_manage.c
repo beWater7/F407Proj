@@ -20,7 +20,7 @@
 
 typedef struct {
     dev_obj *next;
-    os_mutex lock;
+    os_mutex_t lock;
 }dev_mgr;
 
 static dev_mgr s_dev_mgr;
@@ -120,6 +120,7 @@ int dev_unregister(uint8_t dev_id)
         {
             // 找到目标节点
             dev_obj *to_delete = *pp;
+            (void)to_delete;
 
             /* 断链：让前一个节点的 next 指向要删除节点的 next
              * *pp 是指向 B 的指针即为A->next）

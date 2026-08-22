@@ -196,9 +196,7 @@ extern STORAGE_CTRL_T g_stInternalFlashPart;
 #define STOR_ERROR   KERN_ERROR STOR_PREFIX
 #define STOR_WARN    KERN_WARN STOR_PREFIX
 #define STOR_REPORT  KERN_REPORT STOR_PREFIX
-#define STOR_INFO    KERN_INFO STOR_PREFIX
 #define STOR_TRACE   KERN_TRACE STOR_PREFIX
-
 
 #define STORAGE_MNG_DEBUG  0
 
@@ -206,8 +204,8 @@ extern STORAGE_CTRL_T g_stInternalFlashPart;
 #define STOR_DEBUG(format, ...) os_printf_api(format, __func__,__LINE__,##__VA_ARGS__)
 #define STOR_INFO(format, ...) os_printf_api(STOR_PREFIX format, __FUNCTION__, __LINE__, ##__VA_ARGS__)
 #else
-#define STOR_DEBUG(format, ...)
-#define STOR_INFO(format, ...)
+#define STOR_DEBUG(format, ...) do { } while (0)
+#define STOR_INFO(format, ...)  do { } while (0)
 #endif
 
 

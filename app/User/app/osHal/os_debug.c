@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <stdarg.h>
 #include "os_debug.h"
+#include "os_mutex.h"
 #include "malloc.h"
 #include "bsp_usart.h"
 #include "ustdio.h"
@@ -208,7 +209,7 @@ NEXT:
         int remain = (int)LINELENTH - (int)byBuffLen;
         if (remain > 1) {
             va_start(args, format);
-            byTmpLen = vsnprintf(__print_buf__ + byBuffLen, (size_t)remain, format, args);
+            byTmpLen = vsnprintf((char *)__print_buf__ + byBuffLen, (size_t)remain, format, args);
             va_end(args);
             if (byTmpLen < 0) {
                 byTmpLen = 0;
@@ -348,7 +349,7 @@ NEXT:
 
     /* 获取格式化字符串, 保存到buff */
     va_start(args, format);
-    byTmpLen = vsnprintf(byTmpBuff + byBuffLen, len, format, args);
+    byTmpLen = vsnprintf((char *)byTmpBuff + byBuffLen, len, format, args);
     va_end(args);
 
     /* 更新长度 */

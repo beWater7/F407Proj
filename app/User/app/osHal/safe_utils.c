@@ -12,9 +12,9 @@
 #include "safe_utils.h"
 #if SAFE_UTILS_DEBUG
 #include "os_debug.h"
-#define SAFE_UTILS_DEBUG  os_debug 
+#define SAFE_UTILS_LOG  os_debug
 #else
-#define SAFE_UTILS_DEBUG
+#define SAFE_UTILS_LOG(...) do { } while (0)
 #endif
 
 
@@ -32,7 +32,7 @@ int memcpy_s(void *dest, size_t dest_size, const void *src, size_t len)
 {
     if (len > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return -1;
     }
 
@@ -56,7 +56,7 @@ int memmove_s(void *dest, size_t dest_size, const void *src, size_t len)
 {
     if (len > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");    
+        SAFE_UTILS_LOG("err src len!\n");    
         return -1;
     }
 
@@ -80,7 +80,7 @@ int memset_s(void *dest, size_t dest_size, int ch, size_t len)
 {
     if (len > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return -1;
     }
 
@@ -105,7 +105,7 @@ char *strcpy_s(char *dest, size_t dest_size, const char *src)
 
     if (src_len + 1> dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return NULL;
     }
 
@@ -129,7 +129,7 @@ char *strncpy_s(char *dest, size_t dest_size, const char *src, size_t len)
 {
     if (len > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return NULL;
     }
 
@@ -155,7 +155,7 @@ char *strcat_s(char *dest, size_t dest_size, const char *src)
 
     if ((dest_len + src_len + 1) > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return NULL;
     }
 
@@ -179,7 +179,7 @@ char *strncat_s(char *dest, size_t dest_size, const char *src, size_t len)
 
     if ((dest_len + len + 1) > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return NULL;
     }
 
@@ -211,7 +211,7 @@ int sprintf_s(char *dest, size_t dest_size, const char *format, ...)
 
     if (ret < 0 || (size_t)ret >= dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return -1;
     }
 
@@ -236,7 +236,7 @@ int snprintf_s(char *dest, size_t dest_size, size_t len, const char *format, ...
 
     if(len > dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return -1;
     }
 
@@ -246,7 +246,7 @@ int snprintf_s(char *dest, size_t dest_size, size_t len, const char *format, ...
 
     if (ret < 0 || (size_t)ret >= dest_size)
     {
-        SAFE_UTILS_DEBUG("err src len!\n");
+        SAFE_UTILS_LOG("err src len!\n");
         return -1;
     }
 

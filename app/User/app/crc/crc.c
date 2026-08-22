@@ -119,7 +119,7 @@ unsigned int crc(const struct CRC_INFO *info, const unsigned char *ptr, unsigned
         // value = table[value ^ *ptr++];
         if (info->width > 8) {
             while (len--) {
-                value = (value >> 8) ^ table[value & 0xff ^ *ptr++];
+                value = (value >> 8) ^ table[(value & 0xff) ^ *ptr++];
             }
         }
         else while (len--) {
@@ -319,5 +319,27 @@ unsigned int crc32_checksum(const unsigned char *ptr, unsigned int len)
 {
 	crc_table_init(&crc_struct[19]);
 	return crc(&crc_struct[19], ptr, len);
+}
+
+unsigned int crc32_begin(void)
+{
+	const struct CRC_INFO *info = &crc_struct[19];
+	crc_table_init(info);
+	/* refin: 与 crc() 一致，从 reflected(init) 起步 */
+	return reflected(info->init, info->width);
+}
+
+unsigned int crc32_update(unsigned int value, const unsigned char *ptr, unsigned int len)
+{
+	while (len--) {
+		value = (value >> 8) ^ table[(value ^ *ptr++) & 0xff];
+	}
+	return value;
+}
+
+unsigned int crc32_finish(unsigned int value)
+{
+	/* CRC32: refout==refin，仅做最终异或 */
+	return value ^ 0xffffffffu;
 }
 

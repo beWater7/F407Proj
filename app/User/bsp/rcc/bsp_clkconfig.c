@@ -1,111 +1,111 @@
 #include "bsp_clkconfig.h"
 
-/* »ùÓÚSystemInitÔ´ÂëÐÞ¸ÄµÄ Ê±ÖÓÅäÖÃ´úÂë */
-/* 1¡¢É¾³ýÁËÓëf407ÏµÁÐÎÞ¹ØµÄ´úÂë         */
+/* ï¿½ï¿½ï¿½ï¿½SystemInitÔ´ï¿½ï¿½ï¿½Þ¸Äµï¿½ Ê±ï¿½ï¿½ï¿½ï¿½ï¿½Ã´ï¿½ï¿½ï¿½ */
+/* 1ï¿½ï¿½É¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½f407Ïµï¿½ï¿½ï¿½Þ¹ØµÄ´ï¿½ï¿½ï¿½         */
 
 void User_WSetSysClock(void)
 {
- RCC_DeInit(); //¸´Î»RCCµÄËùÓÐ¼Ä´æÆ÷
+ RCC_DeInit(); //ï¿½ï¿½Î»RCCï¿½ï¿½ï¿½ï¿½ï¿½Ð¼Ä´ï¿½ï¿½ï¿½
 /******************************************************************************/
 /*            PLL (clocked by HSE) used as System clock source                */
 /******************************************************************************/
   __IO uint32_t StartUpCounter = 0, HSEStatus = 0;
   
-  /* Enable HSE --- Ê¹ÄÜHSE */
+  /* Enable HSE --- Ê¹ï¿½ï¿½HSE */
   RCC->CR |= ((uint32_t)RCC_CR_HSEON);
  
   /* Wait till HSE is ready and if Time out is reached exit */
-	/* µÈ´ýHSEÆô¶¯ÎÈ¶¨£¬Èç¹û³¬Ê±ÔòÍË³ö */
+	/* ï¿½È´ï¿½HSEï¿½ï¿½ï¿½ï¿½ï¿½È¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ï¿½Ë³ï¿½ */
   do
   {
     HSEStatus = RCC->CR & RCC_CR_HSERDY;
     StartUpCounter++;
   } while((HSEStatus == 0) && (StartUpCounter != HSE_STARTUP_TIMEOUT));
 
-  if ((RCC->CR & RCC_CR_HSERDY) != RESET)  //1: ¾ÍÐ÷  0=reset:Î´¾ÍÐ÷
+  if ((RCC->CR & RCC_CR_HSERDY) != RESET)  //1: ï¿½ï¿½ï¿½ï¿½  0=reset:Î´ï¿½ï¿½ï¿½ï¿½
   {
-    HSEStatus = (uint32_t)0x01;            //HSE¾ÍÐ÷,×´Ì¬Î»ÖÃ1
+    HSEStatus = (uint32_t)0x01;            //HSEï¿½ï¿½ï¿½ï¿½,×´Ì¬Î»ï¿½ï¿½1
   }
   else
   {
     HSEStatus = (uint32_t)0x00; 
   }
   
-	/* HSEÆô¶¯³É¹¦ */
+	/* HSEï¿½ï¿½ï¿½ï¿½ï¿½É¹ï¿½ */
   if (HSEStatus == (uint32_t)0x01)
   {
     /* Select regulator voltage output Scale 1 mode */
-		/* ÉèÖÃµçÑ¹µ÷½ÚÆ÷µÄÄ£Ê½Îª1 */
+		/* ï¿½ï¿½ï¿½Ãµï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½Îª1 */
 		
     RCC->APB1ENR |= RCC_APB1ENR_PWREN;
     PWR->CR |= PWR_CR_VOS;
 
     /* HCLK = SYSCLK / 1*/
-    RCC->CFGR |= RCC_CFGR_HPRE_DIV1;   //AHB 1·ÖÆµ
+    RCC->CFGR |= RCC_CFGR_HPRE_DIV1;   //AHB 1ï¿½ï¿½Æµ
 
   
     /* PCLK2 = HCLK / 2*/
-    RCC->CFGR |= RCC_CFGR_PPRE2_DIV2;  //APB2 2·Ö
+    RCC->CFGR |= RCC_CFGR_PPRE2_DIV2;  //APB2 2ï¿½ï¿½
     
     /* PCLK1 = HCLK / 4*/
-    RCC->CFGR |= RCC_CFGR_PPRE1_DIV4;  //APB1 4·Ö
+    RCC->CFGR |= RCC_CFGR_PPRE1_DIV4;  //APB1 4ï¿½ï¿½
 
     /* Configure the main PLL */
-		/* ÅäÖÃÖ÷ËøÏà»·Ê±ÖÓ PLL_M: 25·ÖÆµ  PLL_N:336±¶Æµ  PLL_P:2·ÖÆµ PLL_Q:7  RCC__   :Ñ¡ÔñHSE */
+		/* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½à»·Ê±ï¿½ï¿½ PLL_M: 25ï¿½ï¿½Æµ  PLL_N:336ï¿½ï¿½Æµ  PLL_P:2ï¿½ï¿½Æµ PLL_Q:7  RCC__   :Ñ¡ï¿½ï¿½HSE */
     /*RCC->PLLCFGR = PLL_M | (PLL_N << 6) | (((PLL_P >> 1) -1) << 16) |
                    (RCC_PLLCFGR_PLLSRC_HSE) | (PLL_Q << 24); */
 
     RCC->PLLCFGR = 25 | (336 << 6) | (((2 >> 1) -1) << 16) |
                    (RCC_PLLCFGR_PLLSRC_HSE) | (7 << 24);
     /* Enable the main PLL */
-		/* Ê¹ÄÜ PLL      */
+		/* Ê¹ï¿½ï¿½ PLL      */
     RCC->CR |= RCC_CR_PLLON;
 
     /* Wait till the main PLL is ready */
-		/* µÈ´ýÖ÷PLLÎÈ¶¨  */
+		/* ï¿½È´ï¿½ï¿½ï¿½PLLï¿½È¶ï¿½  */
     while((RCC->CR & RCC_CR_PLLRDY) == 0)
     {
     }
    
     /* Configure Flash prefetch, Instruction cache, Data cache and wait state */
-		/* ÅäÖÃFLASHÔ¤È¡Öµ£¬Ö¸Áî»º´æ£¬Êý¾Ý»º´æ£¬µÈ´ýÖÜÆÚ */
+		/* ï¿½ï¿½ï¿½ï¿½FLASHÔ¤È¡Öµï¿½ï¿½Ö¸ï¿½î»ºï¿½æ£¬ï¿½ï¿½ï¿½Ý»ï¿½ï¿½æ£¬ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ */
     FLASH->ACR = FLASH_ACR_PRFTEN | FLASH_ACR_ICEN |FLASH_ACR_DCEN |FLASH_ACR_LATENCY_5WS;
 
     /* Select the main PLL as system clock source */
-		/* ÉèÖÃPLLÎªÏµÍ³Ê±ÖÓÔ´ */
+		/* ï¿½ï¿½ï¿½ï¿½PLLÎªÏµÍ³Ê±ï¿½ï¿½Ô´ */
     RCC->CFGR &= (uint32_t)((uint32_t)~(RCC_CFGR_SW));
     RCC->CFGR |= RCC_CFGR_SW_PLL;
 
     /* Wait till the main PLL is used as system clock source */
-		/* È·±£PLL±»Ñ¡ÎªÏµÍ³Ê±ÖÓ £¨¶ÔÓ¦Î»±»ÖÃÎª10£© */
-    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL);
+		/* È·ï¿½ï¿½PLLï¿½ï¿½Ñ¡ÎªÏµÍ³Ê±ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½Ó¦Î»ï¿½ï¿½ï¿½ï¿½Îª10ï¿½ï¿½ */
+    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL)
     {
     }
   }
   else
   { /* If HSE fails to start-up, the application will have wrong clock
          configuration. User can add here some code to deal with this error */
-		/* HSE Æô¶¯Ê§°Ü£¬´Ë´¦Ìí¼ÓÆô¶¯Ê§°ÜµÄ´íÎó´úÂë */
+		/* HSE ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½Ë´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê§ï¿½ÜµÄ´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ */
   }
 }
 
 
-/*  »ùÓÚ¹Ì¼þ¿âÊµÏÖµÄ PLLCLK×÷ÎªÏµÍ³Ê±ÖÓÅäÖÃ HSE×÷ÎªËøÏà»·Ê±ÖÓÀ´Ô´ */
+/*  ï¿½ï¿½ï¿½Ú¹Ì¼ï¿½ï¿½ï¿½Êµï¿½Öµï¿½ PLLCLKï¿½ï¿½ÎªÏµÍ³Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ HSEï¿½ï¿½Îªï¿½ï¿½ï¿½à»·Ê±ï¿½ï¿½ï¿½ï¿½Ô´ */
 void HSE_SetSysClock(uint32_t PLLM, uint32_t PLLN, uint32_t PLLP, uint32_t PLLQ)
 {
 	ErrorStatus HSE_ErrorStatus = ERROR;  //ERROR:0
   //FlagStatus PLL_Status = SET;
 	
- /*¸´Î»RCCµÄËùÓÐ¼Ä´æÆ÷ */
+ /*ï¿½ï¿½Î»RCCï¿½ï¿½ï¿½ï¿½ï¿½Ð¼Ä´ï¿½ï¿½ï¿½ */
 	RCC_DeInit(); 
 
-  /* Enable HSE --- Ê¹ÄÜHSE */
-  RCC_HSEConfig(RCC_HSE_ON);  //rcc.hÖÐ¿É²éÕÒ¶ÔÓ¦µÄº¯Êý(Ò»°ãÔÚ×îÏÂ·½)
+  /* Enable HSE --- Ê¹ï¿½ï¿½HSE */
+  RCC_HSEConfig(RCC_HSE_ON);  //rcc.hï¿½Ð¿É²ï¿½ï¿½Ò¶ï¿½Ó¦ï¿½Äºï¿½ï¿½ï¿½(Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½)
  
 	HSE_ErrorStatus = RCC_WaitForHSEStartUp();
 	if(HSE_ErrorStatus == SUCCESS)
 	{ 
-		/* µçÑ¹µ÷½ÚÆ÷µÄÄ£Ê½Îª1 */
+		/* ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½Îª1 */
 	  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
     PWR->CR |= PWR_CR_VOS;
 		
@@ -117,52 +117,52 @@ void HSE_SetSysClock(uint32_t PLLM, uint32_t PLLN, uint32_t PLLP, uint32_t PLLQ)
 		
 		RCC_PLLCmd(ENABLE);
 		
-    /* ×¢Òâ°Ñº¯Êý·ÅwhileÀï×÷Ñ­»»ÅÐ¶ÏÌõ¼þ»á±»¶à´ÎÖ´ÐÐ */		
-	  /* Ö»·Åº¯Êý½á¹ûÔòÃ»ÓÐ´ËÐ§¹û                      */ 
-		while(RESET ==  RCC_GetFlagStatus(RCC_FLAG_PLLRDY))  //²»³É¹¦ÔòµÈ´ý
+    /* ×¢ï¿½ï¿½Ñºï¿½ï¿½ï¿½ï¿½ï¿½whileï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½á±»ï¿½ï¿½ï¿½Ö´ï¿½ï¿½ */		
+	  /* Ö»ï¿½Åºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã»ï¿½Ð´ï¿½Ð§ï¿½ï¿½                      */ 
+		while(RESET ==  RCC_GetFlagStatus(RCC_FLAG_PLLRDY))  //ï¿½ï¿½ï¿½É¹ï¿½ï¿½ï¿½È´ï¿½
 		{
 		}
 		
-		/* ÅäÖÃFLASHÔ¤È¡Öµ£¬Ö¸Áî»º´æ£¬Êý¾Ý»º´æ£¬µÈ´ýÖÜÆÚ */
+		/* ï¿½ï¿½ï¿½ï¿½FLASHÔ¤È¡Öµï¿½ï¿½Ö¸ï¿½î»ºï¿½æ£¬ï¿½ï¿½ï¿½Ý»ï¿½ï¿½æ£¬ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ */
     FLASH->ACR = FLASH_ACR_PRFTEN | FLASH_ACR_ICEN |FLASH_ACR_DCEN |FLASH_ACR_LATENCY_5WS;
 		
-		/*  ÉèÖÃPLLÎªÏµÍ³Ê±ÖÓ                     */
+		/*  ï¿½ï¿½ï¿½ï¿½PLLÎªÏµÍ³Ê±ï¿½ï¿½                     */
 		RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);
 		
-		while(0x08 != RCC_GetSYSCLKSource()){}       //²»ÊÇPLLÔòµÈ´ý
+		while(0x08 != RCC_GetSYSCLKSource()){}       //ï¿½ï¿½ï¿½ï¿½PLLï¿½ï¿½È´ï¿½
 		
 	} 
   else 
   {
-	  /* HSE Æô¶¯Ê§°Ü£¬´Ë´¦Ìí¼Ó´úÂë */
+	  /* HSE ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Ó´ï¿½ï¿½ï¿½ */
 		
 	}		
 }
 
 
-/*  »ùÓÚ¹Ì¼þ¿âÊµÏÖµÄ 	PLLCLK×÷ÎªÏµÍ³Ê±ÖÓÅäÖÃ HSI×÷ÎªËøÏà»·Ê±ÖÓÀ´Ô´*/
+/*  ï¿½ï¿½ï¿½Ú¹Ì¼ï¿½ï¿½ï¿½Êµï¿½Öµï¿½ 	PLLCLKï¿½ï¿½ÎªÏµÍ³Ê±ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ HSIï¿½ï¿½Îªï¿½ï¿½ï¿½à»·Ê±ï¿½ï¿½ï¿½ï¿½Ô´*/
 void HSI_SetSysClock(uint32_t PLLM, uint32_t PLLN, uint32_t PLLP, uint32_t PLLQ)
 {
 	 volatile uint32_t HSI_ErrorStatus = 0;  //ERROR:0
   //FlagStatus PLL_Status = SET;
 	
- /*¸´Î»RCCµÄËùÓÐ¼Ä´æÆ÷ */
+ /*ï¿½ï¿½Î»RCCï¿½ï¿½ï¿½ï¿½ï¿½Ð¼Ä´ï¿½ï¿½ï¿½ */
 	RCC_DeInit(); 
 
-  /* Enable HSI --- Ê¹ÄÜHSI */
-  RCC_HSICmd(ENABLE);  //rcc.hÖÐ¿É²éÕÒ¶ÔÓ¦µÄº¯Êý(Ò»°ãÔÚ×îÏÂ·½)
+  /* Enable HSI --- Ê¹ï¿½ï¿½HSI */
+  RCC_HSICmd(ENABLE);  //rcc.hï¿½Ð¿É²ï¿½ï¿½Ò¶ï¿½Ó¦ï¿½Äºï¿½ï¿½ï¿½(Ò»ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Â·ï¿½)
   
-	/*µÈ´ýHSIÆô¶¯£¬Ã»ÓÐ¶ÔÓ¦µÄº¯Êý£¬×Ô¼ºÈ¥¿´WaitForHSEStartUpµÄ¶¨Òå */
+	/*ï¿½È´ï¿½HSIï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã»ï¿½Ð¶ï¿½Ó¦ï¿½Äºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô¼ï¿½È¥ï¿½ï¿½WaitForHSEStartUpï¿½Ä¶ï¿½ï¿½ï¿½ */
 	HSI_ErrorStatus = RCC->CR & RCC_CR_HSIRDY;
 	
-	/* ÅÐ¶ÏHSIÊÇ·ñ¾ÍÐ÷£¬ ¶ÁÈ¡¼Ä´æÆøRCC->CRÖÐµÄµ¹ÊýµÚ¶þÎ» 
+	/* ï¿½Ð¶ï¿½HSIï¿½Ç·ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ ï¿½ï¿½È¡ï¿½Ä´ï¿½ï¿½ï¿½RCC->CRï¿½ÐµÄµï¿½ï¿½ï¿½ï¿½Ú¶ï¿½Î» 
 	   HSIRDY: 0x0000  0002
-	 µ±¾ÍÐ÷Ê±£¬ RCC->CR Ó¦¸ÃÎª0x0000 0003£¨11£©  & 0x0000 0002  ---0x0000 0002(RCC_CR_HSIRDY)
-	 Ã»ÓÐ¾ÍÐ÷Ê±£¬             0x0000 0001£¨01£©  & 0x0000 0002  ---0x0000 0000(HSI_ErrorStatus)  */
+	 ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ RCC->CR Ó¦ï¿½ï¿½Îª0x0000 0003ï¿½ï¿½11ï¿½ï¿½  & 0x0000 0002  ---0x0000 0002(RCC_CR_HSIRDY)
+	 Ã»ï¿½Ð¾ï¿½ï¿½ï¿½Ê±ï¿½ï¿½             0x0000 0001ï¿½ï¿½01ï¿½ï¿½  & 0x0000 0002  ---0x0000 0000(HSI_ErrorStatus)  */
 	
 	if(HSI_ErrorStatus == RCC_CR_HSIRDY)   
 	{ 
-		/* µçÑ¹µ÷½ÚÆ÷µÄÄ£Ê½Îª1 */
+		/* ï¿½ï¿½Ñ¹ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ä£Ê½Îª1 */
 	  RCC->APB1ENR |= RCC_APB1ENR_PWREN;
     PWR->CR |= PWR_CR_VOS;
 		
@@ -170,76 +170,76 @@ void HSI_SetSysClock(uint32_t PLLM, uint32_t PLLN, uint32_t PLLP, uint32_t PLLQ)
 		RCC_PCLK1Config(RCC_HCLK_Div4);
     RCC_PCLK2Config(RCC_HCLK_Div2);
 		
-		/* ÅäÖÃËøÏò»·Ê±ÖÓ */
+		/* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê±ï¿½ï¿½ */
 		RCC_PLLConfig(RCC_PLLSource_HSI, PLLM, PLLN, PLLP, PLLQ);
 		
-		/* Ê¹ÄÜ */
+		/* Ê¹ï¿½ï¿½ */
 		RCC_PLLCmd(ENABLE);
 		
-    /* ×¢Òâ°Ñº¯Êý·ÅwhileÀï×÷Ñ­»»ÅÐ¶ÏÌõ¼þ»á±»¶à´ÎÖ´ÐÐ */		
-	  /* Ö»·Åº¯Êý½á¹ûÔòÃ»ÓÐ´ËÐ§¹û                      */ 
-		while(RESET ==  RCC_GetFlagStatus(RCC_FLAG_PLLRDY))  //²»³É¹¦ÔòµÈ´ý
+    /* ×¢ï¿½ï¿½Ñºï¿½ï¿½ï¿½ï¿½ï¿½whileï¿½ï¿½ï¿½ï¿½Ñ­ï¿½ï¿½ï¿½Ð¶ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½á±»ï¿½ï¿½ï¿½Ö´ï¿½ï¿½ */		
+	  /* Ö»ï¿½Åºï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ã»ï¿½Ð´ï¿½Ð§ï¿½ï¿½                      */ 
+		while(RESET ==  RCC_GetFlagStatus(RCC_FLAG_PLLRDY))  //ï¿½ï¿½ï¿½É¹ï¿½ï¿½ï¿½È´ï¿½
 		{
 		}
 		
-		/* ÅäÖÃFLASHÔ¤È¡Öµ£¬Ö¸Áî»º´æ£¬Êý¾Ý»º´æ£¬µÈ´ýÖÜÆÚ */
+		/* ï¿½ï¿½ï¿½ï¿½FLASHÔ¤È¡Öµï¿½ï¿½Ö¸ï¿½î»ºï¿½æ£¬ï¿½ï¿½ï¿½Ý»ï¿½ï¿½æ£¬ï¿½È´ï¿½ï¿½ï¿½ï¿½ï¿½ */
     FLASH->ACR = FLASH_ACR_PRFTEN | FLASH_ACR_ICEN |FLASH_ACR_DCEN |FLASH_ACR_LATENCY_5WS;
 		
-		/*  ÉèÖÃPLLÎªÏµÍ³Ê±ÖÓ                     */
+		/*  ï¿½ï¿½ï¿½ï¿½PLLÎªÏµÍ³Ê±ï¿½ï¿½                     */
 		RCC_SYSCLKConfig(RCC_SYSCLKSource_PLLCLK);
 		
-		while(0x08 != RCC_GetSYSCLKSource()){}       //²»ÊÇPLLÔòµÈ´ý
+		while(0x08 != RCC_GetSYSCLKSource()){}       //ï¿½ï¿½ï¿½ï¿½PLLï¿½ï¿½È´ï¿½
 		
 	} 
   else 
   {
-	  /* HSI Æô¶¯Ê§°Ü£¬´Ë´¦Ìí¼Ó´úÂë */
+	  /* HSI ï¿½ï¿½ï¿½ï¿½Ê§ï¿½Ü£ï¿½ï¿½Ë´ï¿½ï¿½ï¿½ï¿½Ó´ï¿½ï¿½ï¿½ */
 		
 	}		
 }
 
 
 
-/* ½«ÏµÍ³Ê±ÖÓÍ¨¹ýMCO1£¨PA8£©Êä³ö£¬Ê¹ÓÃÊ¾²¨Æ÷¿ÉÒÔ²é¿´Ê±ÖÓÊä³ö*/
+/* ï¿½ï¿½ÏµÍ³Ê±ï¿½ï¿½Í¨ï¿½ï¿½MCO1ï¿½ï¿½PA8ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½Ê¾ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ô²é¿´Ê±ï¿½ï¿½ï¿½ï¿½ï¿½*/
 void MCO1_GPIO_Config(void)
 {
-   /* ÅäÖÃGPIO */
-	 /* µÚÒ»²½: ¿ªÆôGPIOµÄÊ±ÖÓ  --> rcc.c --> rcc.h */
+   /* ï¿½ï¿½ï¿½ï¿½GPIO */
+	 /* ï¿½ï¿½Ò»ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê±ï¿½ï¿½  --> rcc.c --> rcc.h */
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOA, ENABLE);
 	 
-	/* µÚ¶þ²½: ¶¨ÒåGPIOµÄ³õÊ¼»¯½á¹¹Ìå */
+	/* ï¿½Ú¶ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½Ä³ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½ */
 	GPIO_InitTypeDef GPIO_InitStructure;
 
-	/* µÚÈý²½: ÅäÖÃGPIO³õÊ¼»¯½á¹¹Ìå */
+	/* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½ */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;     //Ê²Ã´Ê±ºòÉèÖÃ¹Ü½ÅÎª¸´ÓÃ¹¦ÄÜ
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;     //Ê²Ã´Ê±ï¿½ï¿½ï¿½ï¿½ï¿½Ã¹Ü½ï¿½Îªï¿½ï¿½ï¿½Ã¹ï¿½ï¿½ï¿½
   GPIO_InitStructure.GPIO_Speed = GPIO_High_Speed;
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
-	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;   //ÉÏÀ­
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;   //ï¿½ï¿½ï¿½ï¿½
 	
-	/* µÚËÄ²½: µ÷ÓÃGPIO³õÊ¼»¯½á¹¹Ìå£¬°ÑÅäÖÃºÃµÄ½á¹¹ÌåµÄ³ÉÔ±²ÎÊýÐ´Èë¼Ä´æÆ÷*/
+	/* ï¿½ï¿½ï¿½Ä²ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½å£¬ï¿½ï¿½ï¿½ï¿½ï¿½ÃºÃµÄ½á¹¹ï¿½ï¿½Ä³ï¿½Ô±ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½Ä´ï¿½ï¿½ï¿½*/
   GPIO_Init(GPIOA, &GPIO_InitStructure);
 	
 }
 
-/* ½«ÏµÍ³Ê±ÖÓÍ¨¹ýMCO2£¨PC9£©Êä³ö */
+/* ï¿½ï¿½ÏµÍ³Ê±ï¿½ï¿½Í¨ï¿½ï¿½MCO2ï¿½ï¿½PC9ï¿½ï¿½ï¿½ï¿½ï¿½ */
 void MCO2_GPIO_Config(void)
 {
-   /* ÅäÖÃGPIO */
-	 /* µÚÒ»²½: ¿ªÆôGPIOµÄÊ±ÖÓ  --> rcc.c --> rcc.h */
+   /* ï¿½ï¿½ï¿½ï¿½GPIO */
+	 /* ï¿½ï¿½Ò»ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê±ï¿½ï¿½  --> rcc.c --> rcc.h */
 	RCC_AHB1PeriphClockCmd(RCC_AHB1Periph_GPIOC, ENABLE);
 	 
-	/* µÚ¶þ²½: ¶¨ÒåGPIOµÄ³õÊ¼»¯½á¹¹Ìå */
+	/* ï¿½Ú¶ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½Ä³ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½ */
 	GPIO_InitTypeDef GPIO_InitStructure;
 
-	/* µÚÈý²½: ÅäÖÃGPIO³õÊ¼»¯½á¹¹Ìå */
+	/* ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½ï¿½ */
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_9;
-  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;     //Ê²Ã´Ê±ºòÉèÖÃ¹Ü½ÅÎª¸´ÓÃ¹¦ÄÜ
+  GPIO_InitStructure.GPIO_Mode = GPIO_Mode_AF;     //Ê²Ã´Ê±ï¿½ï¿½ï¿½ï¿½ï¿½Ã¹Ü½ï¿½Îªï¿½ï¿½ï¿½Ã¹ï¿½ï¿½ï¿½
   GPIO_InitStructure.GPIO_Speed = GPIO_High_Speed;
   GPIO_InitStructure.GPIO_OType = GPIO_OType_PP;
-	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;   //ÉÏÀ­
+	GPIO_InitStructure.GPIO_PuPd = GPIO_PuPd_UP;   //ï¿½ï¿½ï¿½ï¿½
 	
-	/* µÚËÄ²½: µ÷ÓÃGPIO³õÊ¼»¯½á¹¹Ìå£¬°ÑÅäÖÃºÃµÄ½á¹¹ÌåµÄ³ÉÔ±²ÎÊýÐ´Èë¼Ä´æÆ÷*/
+	/* ï¿½ï¿½ï¿½Ä²ï¿½: ï¿½ï¿½ï¿½ï¿½GPIOï¿½ï¿½Ê¼ï¿½ï¿½ï¿½á¹¹ï¿½å£¬ï¿½ï¿½ï¿½ï¿½ï¿½ÃºÃµÄ½á¹¹ï¿½ï¿½Ä³ï¿½Ô±ï¿½ï¿½ï¿½ï¿½Ð´ï¿½ï¿½Ä´ï¿½ï¿½ï¿½*/
   GPIO_Init(GPIOC, &GPIO_InitStructure);
 	
 }

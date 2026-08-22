@@ -113,7 +113,9 @@
 #include <stdio.h>
 /* added by liudayi */
 #include "malloc.h"
+#if defined(CONFIG_APP_FATFS)
 #include "ff.h"
+#endif
 #include "os_debug.h"
 #include "bsp_spi_flash.h"
 #include "flash_manage.h"
@@ -122,7 +124,7 @@
 #include "node_tree.h"
 
 struct http_state* gs_hs[2];  //?????????http?????web????????????
-/* ???sram?��???????? */
+/* ???sram?��???????? */
 //__EXRAM char gs_byWebFile[HTTPD_WEB_FILE_LEN];
 
 
@@ -332,6 +334,7 @@ static err_t http_close_or_abort_conn(struct altcp_pcb *pcb, struct http_state *
 static err_t http_find_file(struct http_state *hs, const char *uri, int is_09);
 /*static*/ err_t http_init_file(struct http_state *hs, struct fs_file *file, int is_09, const char *uri, u8_t tag_check, char *params);
 static err_t http_poll(void *arg, struct altcp_pcb *pcb);
+static void http_state_free(struct http_state *hs);
 static u8_t http_check_eof(struct altcp_pcb *pcb, struct http_state *hs);
 #if LWIP_HTTPD_FS_ASYNC_READ
 static void http_continue(void *connection);
@@ -427,11 +430,46 @@ http_kill_oldest_connection(u8_t ssi_required)
     http_close_or_abort_conn(hs_free_next->next->pcb, hs_free_next->next, 1); /* this also unlinks the http_state from the list */
   }
 }
+
+/**
+ * @brief 关掉除 keep 外所有 HTTP 连接，释放各自 fs ReadBuffer（OTA 腾堆）
+ */
+void httpd_close_all_except(void *keep_http_state)
+{
+  struct http_state *keep = (struct http_state *)keep_http_state;
+  unsigned closed = 0;
+
+  for (;;) {
+    struct http_state *hs = http_connections;
+    while (hs != NULL && hs == keep) {
+      hs = hs->next;
+    }
+    if (hs == NULL) {
+      break;
+    }
+    if (hs->pcb != NULL) {
+      http_close_or_abort_conn(hs->pcb, hs, 1);
+      closed++;
+    } else {
+      /* 无 pcb 的异常节点：从链表摘掉，避免死循环 */
+      http_remove_connection(hs);
+      http_state_free(hs);
+      closed++;
+    }
+  }
+  if (closed) {
+    os_printf(KERN_WARN"httpd: closed %u other conn(s) for OTA heap\n", closed);
+  }
+}
 #else /* LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED */
 
 #define http_add_connection(hs)
 #define http_remove_connection(hs)
 
+void httpd_close_all_except(void *keep_http_state)
+{
+  LWIP_UNUSED_ARG(keep_http_state);
+}
 #endif /* LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED */
 
 #if LWIP_HTTPD_SSI
@@ -527,6 +565,14 @@ http_state_eof(struct http_state *hs)
     hs->req = NULL;
   }
 #endif /* LWIP_HTTPD_SUPPORT_REQUESTLIST */
+#if LWIP_HTTPD_SUPPORT_POST
+  if (hs->pkt) {
+    os_free(hs->pkt);
+    hs->pkt = NULL;
+  }
+  hs->pkt_len = 0;
+  hs->pkt_recved_len = 0;
+#endif
 }
 
 /** Free a struct http_state.
@@ -1767,6 +1813,16 @@ http_get_404_file(struct http_state *hs, const char **uri)
 }
 
 #if LWIP_HTTPD_SUPPORT_POST
+static int
+http_uri_is_ota(const char *url)
+{
+  if (url == NULL) {
+    return 0;
+  }
+  /* /protocol/system/upload 与 /upgrade 走 web_upgrade/fw_upgrade，不是 JSON 协议树 */
+  return (strstr(url, "/upload") != NULL) || (strstr(url, "/upgrade") != NULL);
+}
+
 static err_t
 http_handle_post_finished(struct http_state *hs)
 {
@@ -1782,6 +1838,18 @@ http_handle_post_finished(struct http_state *hs)
   /* NULL-terminate the buffer */
   http_uri_buf[0] = 0;
   httpd_post_finished(hs, http_uri_buf, LWIP_HTTPD_URI_BUF_LEN);
+  /* JSON 协议 POST（如 /protocol/wifi/config）body 收齐后再走协议树。
+   * upload/upgrade 已经在 web_upgrade/fw_upgrade 里回了 200，再进协议树会 404。 */
+  if ((hs->http_method == METHOD_POST) && hs->url[0] &&
+      (strstr(hs->url, XXX_PROTOCOL) != NULL) &&
+      !http_uri_is_ota(hs->url)) {
+    processProtocol(hs, hs->url);
+    return ERR_OK;
+  }
+  if (http_uri_is_ota(hs->url) || hs->send_flag) {
+    hs->send_flag = 0;
+    return ERR_OK;
+  }
   return http_find_file(hs, http_uri_buf, 0);
 }
 
@@ -1878,19 +1946,10 @@ http_post_request(struct pbuf *inp, struct http_state *hs,
         }
         if (content_len >= 0) {
 #if 1
-		/* added by liudai */
-#define BOUNDARY      "boundary="
-#define BOUNDARY_LEN   8
-          //printf("%s\n",uri_end + 1);	
-	      /* ????????��??????????????????????????��-???? */
-		  char *boundary = lwip_strnstr(inp->payload, BOUNDARY, inp->len);
-		  /* ??????????? */	
-		  if(boundary)
-		  {
-			 hs->pkt_len = content_len;
-             //  ("len:%d\n", gs_hs[0]->pkt_len);
-		  }
-		  /* end */
+		/* upload/upgrade???????????????? boundary= ?????
+		 * ?? application/octet-stream ??? pkt_len=0??????????? */
+		  hs->pkt_len = (u32_t)content_len;
+		  hs->pkt_recved_len = 0;
 #endif
           /* adjust length of HTTP header passed to application */
           const char *hdr_start_after_uri = uri_end + 1;
@@ -2116,7 +2175,7 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
         /* received GET request */
         LWIP_DEBUGF(HTTPD_DEBUG | LWIP_DBG_TRACE, ("Received POST request\n"));
 
-        /* ????post��??     added by ldy */
+        /* ????post��??     added by ldy */
         char byTotalLenBuff[16] = {0};
         uint32_t dwDataLen = 0; //??????????
         char *data_pos = NULL;
@@ -2125,19 +2184,34 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
              os_printf(KERN_WARN"[%s:%d]web upgrade start!\n",__FUNCTION__,__LINE__);
              gs_hs[0] = hs;
              gs_hs[1] = NULL;
+             /* 尽早腾堆，等 body 到达前先释放其它 GET 的大缓冲 */
+             ota_prepare_heap(hs);
         }
         else if(strstr(sp1, "upgrade"))
         {
              os_printf(KERN_WARN"[%s:%d]fw upgrade start!\n",__FUNCTION__,__LINE__);
+             hs->dwData_len = 0;
              if (NULL != (data_pos = strstr(sp1, "totalSize="))) {
+                 char *end;
                  data_pos += strlen("totalSize=");
-                 dwDataLen = strstr(data_pos, " ") - data_pos;
-                 MEMCPY(byTotalLenBuff, data_pos, dwDataLen);
-                 hs->dwData_len = atoi(byTotalLenBuff);
+                 end = strstr(data_pos, " ");
+                 if (end == NULL) {
+                     end = strstr(data_pos, "\r");
+                 }
+                 if (end != NULL && end > data_pos) {
+                     dwDataLen = (uint32_t)(end - data_pos);
+                     if (dwDataLen >= sizeof(byTotalLenBuff)) {
+                         dwDataLen = sizeof(byTotalLenBuff) - 1U;
+                     }
+                     memset(byTotalLenBuff, 0, sizeof(byTotalLenBuff));
+                     MEMCPY(byTotalLenBuff, data_pos, dwDataLen);
+                     hs->dwData_len = (u32_t)atoi(byTotalLenBuff);
+                 }
                  os_printf(KERN_WARN"[%s:%d]fw len: %d!\n", __FUNCTION__, __LINE__, hs->dwData_len);
              }
              gs_hs[1] = hs;
              gs_hs[0] = NULL;
+             ota_prepare_heap(hs);
         }
         /* end */
 
@@ -2218,20 +2292,7 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
             if (err == ERR_ARG) {
               goto badrequest;
             }
-            /* post protocol process */
-            if(hs->http_method && ERR_OK == err)
-            {
-                if(hs != gs_hs[0] && hs != gs_hs[1])
-                { 
-                  processProtocol(hs, uri);
-                }
-                return ERR_OK;
-            }
-            else if(hs->http_method && hs->pkt)
-            {
-                os_free(hs->pkt);
-                hs->pkt = NULL;
-            }
+            /* /protocol POST 等 body 收齐后在 http_handle_post_finished 处理 */
             return err;
           } else
 #endif /* LWIP_HTTPD_SUPPORT_POST */
@@ -2897,7 +2958,7 @@ http_set_cgi_handlers(const tCGI *cgis, int num_handlers)
  */
 void shiftString(char arr[], int shift, int size) {
     if (shift <= 0 || size <= shift) {
-        return; // ??????0????????��??????????
+        return; // ??????0????????��??????????
     }
 
     // ??????????????
@@ -2905,7 +2966,7 @@ void shiftString(char arr[], int shift, int size) {
         if (i + shift < size) {
             arr[i + shift] = arr[i];
         }
-        arr[i] = ' '; // ????��??
+        arr[i] = ' '; // ????��??
     }
 }
 
@@ -2939,8 +3000,32 @@ err_t httpd_post_begin(void *connection, const char *uri, const char *http_reque
   hs = (struct http_state *)connection;
 
   memset(hs->url, 0, sizeof(hs->url));
-  memcpy(hs->url, uri, strlen(uri));
-	*post_auto_wnd = 0;
+  if (uri) {
+    size_t n = strlen(uri);
+    if (n >= sizeof(hs->url)) {
+      n = sizeof(hs->url) - 1;
+    }
+    memcpy(hs->url, uri, n);
+  }
+  /* JSON 协议自动窗口；upload/upgrade 大包要限窗，并在此登记会话（比扫首行更稳） */
+  if (uri && strstr(uri, XXX_PROTOCOL)) {
+    if (http_uri_is_ota(uri)) {
+      *post_auto_wnd = 0;
+      if (strstr(uri, "/upload")) {
+        gs_hs[0] = hs;
+        gs_hs[1] = NULL;
+        ota_prepare_heap(hs);
+      } else {
+        gs_hs[1] = hs;
+        gs_hs[0] = NULL;
+        ota_prepare_heap(hs);
+      }
+    } else {
+      *post_auto_wnd = 1;
+    }
+  } else {
+    *post_auto_wnd = 0;
+  }
 
 	return ERR_OK;
 }
@@ -2961,16 +3046,13 @@ err_t httpd_post_receive_data(void *connection, struct pbuf *p)
 	int dwLen = 0;
 	/* ????web???????????????????????,
 	 * ?????????????FIL  ?????????????, 
-	 * ??????��
+	 * ??????��
 	 */
 	//extern FIL stWebFile;
 	//FRESULT res_WebFile;				  /* ?????????? */
 	//char byTmpBuff[16] = {0};
 
 	struct http_state *hs = NULL;
-	u16_t wBoundaryHeaderLen = 0;
-	UINT webWriteNum;	
-	unsigned int dwWebFileCheckSum = 0;
 
 	if(NULL == connection || NULL == p || NULL == p->payload)
 	{
@@ -2980,28 +3062,22 @@ err_t httpd_post_receive_data(void *connection, struct pbuf *p)
 
   hs = (struct http_state *)connection;
 
-	byPostBuff = (char *)os_malloc(TCP_MSS);
+	/* ???? TCP_MSS?pbuf ? tot_len ???????????? */
+	byPostBuff = (char *)os_malloc(p->tot_len ? p->tot_len : 1);
 	if(NULL == byPostBuff)
 	{
 		os_debug("byPostBuff malloc err!\n");
 		return ERR_MEM;
 	}
 
-	/* ????TCP??, ???qbuf?????????��????? */
-	memset(byPostBuff, 0, TCP_MSS); 
+	memset(byPostBuff, 0, p->tot_len ? p->tot_len : 1);
 
-	//printf("[%s:%d]  p->payload:%s  tot_len:%d\n",__FUNCTION__,__LINE__, p->payload,p->tot_len);
-
-	//printf("[%s:%d] %s\n",__FUNCTION__,__LINE__,byPostBuff);
-
-	/* p????????????????????????��????? */
 	pTmpPbuf = p;
 	while(pTmpPbuf)
 	{
 		if(pTmpPbuf->payload)
 		{
 			MEMCPY(byPostBuff + dwLen, pTmpPbuf->payload, pTmpPbuf->len);
-			//printf("[%s:%d] %d\n",__FUNCTION__,__LINE__, pTmpPbuf->len);
 			dwLen += pTmpPbuf->len;
 		}
 		pTmpPbuf = pTmpPbuf->next;
@@ -3011,9 +3087,11 @@ err_t httpd_post_receive_data(void *connection, struct pbuf *p)
 	//os_printf("[%s:%d] %d:%d\n",__FUNCTION__,__LINE__,dwLen, p->tot_len);
 	//printf("[%s:%d] %s:%d \n",__FUNCTION__,__LINE__,byPostBuff, strlen(byPostBuff));
 
-    /* tcp??????????, ?????????��???????????????? */
+    /* tcp??????????, ?????????��???????????????? */
 #ifdef LWIP_HTTPD_POST_MANUAL_WND
-    httpd_post_data_recved(hs, p->tot_len);
+    if (hs->no_auto_wnd) {
+        httpd_post_data_recved(hs, p->tot_len);
+    }
 #else
     altcp_recved(hs->pcb, p->tot_len);
 #endif
@@ -3033,9 +3111,22 @@ err_t httpd_post_receive_data(void *connection, struct pbuf *p)
 
     if(METHOD_POST == hs->http_method)
     {
-        hs->pkt = (char *)os_malloc(dwLen);
-        memset(hs->pkt, 0, dwLen);
-        memcpy_s(hs->pkt, dwLen, byPostBuff, dwLen);
+        char *nb;
+        u32_t new_len = hs->pkt_recved_len + (u32_t)dwLen;
+
+        nb = (char *)os_malloc(new_len + 1U);
+        if (NULL == nb) {
+            os_debug("pkt malloc err\n");
+            goto __EXIT;
+        }
+        memset(nb, 0, new_len + 1U);
+        if (hs->pkt && hs->pkt_recved_len) {
+            memcpy(nb, hs->pkt, hs->pkt_recved_len);
+            os_free(hs->pkt);
+        }
+        memcpy(nb + hs->pkt_recved_len, byPostBuff, (size_t)dwLen);
+        hs->pkt = nb;
+        hs->pkt_recved_len = new_len;
         goto __EXIT;
     }
 
@@ -3056,7 +3147,7 @@ __EXIT:
 
 //    /* ???????????lwip????? */
 //    os_debug("MEM stats: used=%u, max=%u\n", lwip_stats.mem.used, lwip_stats.mem.max);
-//    /* ????????????��???????TCP_SND_BUF????????????��?????????TCP_SND_QUEUELEN */
+//    /* ????????????��???????TCP_SND_BUF????????????��?????????TCP_SND_QUEUELEN */
 //    os_debug("TCP_SND_BUF: %u, TCP_WND: %u\n", tcp_sndbuf(hs->pcb), tcp_sndqueuelen(hs->pcb));
 //    os_printf("rcv_wnd: %u, snd_wnd: %u, snd_buf: %u\n", 
 //          hs->pcb->rcv_wnd, hs->pcb->snd_wnd, hs->pcb->snd_buf);
@@ -3079,9 +3170,10 @@ void httpd_post_finished(void *connection, char *response_uri, u16_t response_ur
 	(void)connection;
 	(void)response_uri;
 	(void)response_uri_len;
-	/* POST �ж�/����ʱ����ͷ��������壬����������� web �� malloc ʧ�� */
+	/* POST 结束/连接断开：释放 web 缓冲，并结束腾堆（web 升级不 reboot） */
 	upgrade_buf_release();
 	memset(gs_hs, 0, sizeof(gs_hs));
+	ota_finish_heap_prepare();
 }
 #endif
 /* end */

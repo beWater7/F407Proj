@@ -4,9 +4,9 @@
 #include "os_debug.h"
 
 
-#define METHOD_GET  1
-#define METHOD_PUT  2
-#define METHOD_POST 3
+#define METHOD_GET  (1u << 0)
+#define METHOD_PUT  (1u << 1)
+#define METHOD_POST (1u << 2)
 
 #define PROTOCOL_SEND_BUF_SIZE 1024
 
@@ -40,7 +40,9 @@ typedef enum
 }HTTP_STATUS_T;
 
 
+#ifndef HTTP_CONTENT_TYPE
 #define HTTP_CONTENT_TYPE(contenttype) "Content-Type: "contenttype"\r\n"
+#endif
 #define HTTP_CONTENT_DISPOSITION(contenttype, positiontype, filename) \
 ""contenttype"Content-Disposition: "positiontype"; filename="filename"\r\n"
 
@@ -69,18 +71,8 @@ typedef enum
 #define HTTP_CONTENT_DISPO_LOG    HTTP_CONTENT_DISPOSITION(HTTP_HDR_TEXT, HTTP_ATTACH, LOG_FILE_NAME)
 
 
-static const char* http_header_strings[] = {
-    [HTTP_OK] = "HTTP/1.1 200 OK\r\n",
-    [HTTP_NOT_FOUND] = "HTTP/1.1 404 File not found\r\n",
-    [HTTP_BAD_REQUEST] = "HTTP/1.1 400 Bad Request\r\n",
-    [HTTP_NOT_IMPL] = "HTTP/1.1 501 Not Implemented\r\n"
-};
-
-
-static const char* http_content_strings[] = {
-    [HTTP_FILE_TYPE_LOG] = HTTP_CONTENT_DISPO_LOG,
-    [HTTP_FILE_TYPE_JSON] = HTTP_HDR_JSON
-};
+extern const char *http_header_strings[];
+extern const char *http_content_strings[];
 
 
 typedef int (*process)(void *hs, void *args);

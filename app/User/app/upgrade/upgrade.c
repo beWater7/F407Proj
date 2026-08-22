@@ -19,7 +19,9 @@
 #include "./internalFlash/bsp_internalFlash.h"
 #include "os_debug.h"
 #include "bsp_spi_flash.h"
+#if defined(CONFIG_APP_FATFS)
 #include "ff.h"
+#endif
 #include "flash_manage.h"
 #include "upgrade.h"
 
@@ -68,7 +70,7 @@ uint32_t getFlashSector(uint32 len, uint32_t dwStartSector)
         }
         else
         {
-            FLASH_DEBUG("fw too large! len:%d\n", len);
+            FLASH_DEBUG("fw too large! len:%lu\n", (unsigned long)len);
         }
         
         if(bySectorSize >= len)
@@ -76,7 +78,7 @@ uint32_t getFlashSector(uint32 len, uint32_t dwStartSector)
         bySectorCount++;
     }
 
-    FLASH_DEBUG("bySectorSize:%d\n", bySectorSize);
+    FLASH_DEBUG("bySectorSize:%lu\n", (unsigned long)bySectorSize);
     bySectorCount += dwStartSector;
 
     /* 匹配到扇区对应的sector */
@@ -186,8 +188,11 @@ void PrintProgressBar(uint32_t size, uint32_t total_size)
 int upgrade_write_fw(uint8 *fw, uint32 len)
 {
     uint32_t dwFirstSector = 0;
+    (void)dwFirstSector;
     uint32_t dwLastSector = 0;
+    (void)dwLastSector;
     uint8_t  byOtaRegion = 0;
+    (void)byOtaRegion;
     ota_flag_t stOtaFlag = {0};
 
     CUSTOM_ASSERT(NULL == fw, return -1);
@@ -199,6 +204,7 @@ int upgrade_write_fw(uint8 *fw, uint32 len)
 
     /* active_app==1 表示当前工作在APP2, 此时应擦写fw1进行升级 */
     byOtaRegion = (1 == stOtaFlag.active_app)?PART_FW1:PART_FW2;
+    (void)byOtaRegion;
     //byOtaRegion = (1 == stOtaFlag.active_app)?PART_FW1:PART_FW2;
     stOtaFlag.len = len;
     stOtaFlag.crc32 = crc32_checksum(fw, len);
@@ -212,8 +218,10 @@ int upgrade_write_fw(uint8 *fw, uint32 len)
     os_printf("stOtaFlag.len:%d stOtaFlag.crc32:0x%08x stOtaFlag.active_app:%d\n", stOtaFlag.len, stOtaFlag.crc32, stOtaFlag.active_app);
 #if 0
     dwFirstSector = GetSector(internal_flash_table[byOtaRegion].start_addr);
+    (void)dwFirstSector;
     /* 固件区独占几个完整扇区大小 */
     dwLastSector = GetSector(internal_flash_table[byOtaRegion].start_addr + internal_flash_table[byOtaRegion].size);
+    (void)dwLastSector;
 
     FLASH_Unlock();
 
@@ -237,6 +245,7 @@ int upgrade_write_fw(uint8 *fw, uint32 len)
 
     /* 擦除升级控制分区 */
     dwFirstSector = GetSector(internal_flash_table[PART_RES].start_addr);
+    (void)dwFirstSector;
     /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
     if (FLASH_EraseSector(dwFirstSector, VoltageRange_3) != FLASH_COMPLETE)
     {
@@ -291,66 +300,111 @@ __asm uint32_t get_pc(void)
 
 
 /*****************************************************
- * @fn       upgrade_write_fw
- * @brief    固件写入spi flash
- * @note     N/A
- * @param    
- * @retval   N/A
+ * @fn       ota_get_active_slot
+ * @brief    当前运行槽：0=APP1, 1=APP2
+ *****************************************************/
+uint8_t ota_get_active_slot(void)
+{
+    ota_flag_t flag = {0};
+    uint32_t pc;
+
+    SPI_FLASH_READ(PART_OTA, 0, (uint8 *)&flag, sizeof(flag));
+    if (flag.magic == OTA_FLAG_MAGIC) {
+        return (flag.active_app == 1U) ? 1U : 0U;
+    }
+
+    /* 首次升级：标志未写，用 PC 判断当前链接基址 */
+    pc = get_pc();
+    if (pc >= APP2_ADDRESS && pc < (APP2_ADDRESS + APP_FLASH_SIZE)) {
+        return 1U;
+    }
+    return 0U;
+}
+
+/*****************************************************
+ * @fn       upgrade_write_fw_v2
+ * @brief    固件写入 SPI Flash，供 boot 搬运
+ * @note     DUAL_APP：调用方已选好「空闲槽」对应镜像；此处保留 active_app=当前槽
  *****************************************************/
 int upgrade_write_fw_v2(uint8 *fw, uint32 len)
 {
-    uint32_t dwFirstSector = 0;
-    uint32_t dwLastSector = 0;
-    uint8_t  byOtaRegion = 0;
     ota_flag_t stOtaFlag = {0};
-    uint32_t current_pc = 0;
+    uint8_t cur_slot = 0;
 
     CUSTOM_ASSERT(NULL == fw, return -1);
     CUSTOM_ASSERT(0 == len, return -1);
 
-    uint32_t pc;
-    pc = get_pc();
-    printf("current pc:0x%08x\r\n", pc);
+    /*
+     * 固件落到 SPI PART_APP1；bootloader fw_upgrade_v2() 用 target_app 作为
+     * SPI 分区号去读。
+     */
+    if (SPI_FLASH_WRITE_VERIFY(PART_APP1, 0, fw, len)) {
+        os_debug("upgrade_write_fw_v2: write PART_APP1 failed\r\n");
+        return -1;
+    }
 
-#if (OTA_MODE == MAIN_APP)
-    /* 读取 */
-    SPI_FLASH_READ(PART_OTA, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t));
-
-    /* 升级包写入固定的APP1区域 */
-    /* 分区已占用大小清0 */
-    spi_flash_table[PART_APP1].size_used = 0;
-    spi_flash_table[PART_OTA].size_used = 0;
-
-    /* 写入固件正文 */
-    //SPI_FLASH_WRITE(byOtaRegion, 0, fw, len);
-    SPI_FLASH_WRITE_VERIFY(PART_APP1, 0, fw, len);
-#endif
-
-#if (OTA_MODE == MAIN_APP)
-    /* TODO */
-#endif
-    /* 获取当前运行地址, 切换APP分区 */
-    current_pc = SCB->VTOR;
-    printf("current vtor:0x%08x\r\n", current_pc);
-    //stOtaFlag.active_app = (current_pc == APP1_ADDRESS) ? PART_FW1:PART_FW2;
-    //byOtaRegion = (stOtaFlag.active_app == PART_FW1) ? PART_FW2 : PART_FW1;
-
-    stOtaFlag.active_app = PART_FW1;
-    byOtaRegion = PART_FW2;
+    memset(&stOtaFlag, 0, sizeof(stOtaFlag));
     stOtaFlag.len = len;
     stOtaFlag.crc32 = crc32_checksum(fw, len);
-    stOtaFlag.target_app = byOtaRegion;
-    stOtaFlag.upgrade_flag = 1;
+    stOtaFlag.target_app = PART_APP1;
+#if (OTA_MODE == DUAL_APP)
+    cur_slot = ota_get_active_slot();
+    stOtaFlag.active_app = cur_slot; /* boot 据此写 inactive bank */
+#else
+    stOtaFlag.active_app = 0;
+    (void)cur_slot;
+#endif
+    stOtaFlag.upgrade_flag = OTA_FLAG_UPGRADE_PENDING;
     stOtaFlag.state = UPDATE_DOWNLOAD_OK;
+    stOtaFlag.magic = OTA_FLAG_MAGIC;
 
-    /* 写入固件信息 */
-    SPI_FLASH_WRITE(PART_OTA, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t));
+    if (SPI_FLASH_WRITE(PART_OTA, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t))) {
+        os_debug("upgrade_write_fw_v2: write PART_OTA failed\r\n");
+        return -1;
+    }
 
-    os_printf("stOtaFlag.len:%d stOtaFlag.crc32:0x%08x stOtaFlag.active_app:%d target_app:%d\n", 
-                                                                    stOtaFlag.len, 
-                                                                    stOtaFlag.crc32,
-                                                                    stOtaFlag.active_app,
-                                                                    stOtaFlag.target_app);
+    os_printf("OTA ready: len=%lu crc=0x%08lx spi=APP1(%u) active_slot=%u "
+              "next=APP%u size_used[app1]=%lu\r\n",
+              (unsigned long)stOtaFlag.len,
+              (unsigned long)stOtaFlag.crc32,
+              (unsigned)PART_APP1,
+              (unsigned)stOtaFlag.active_app,
+              (unsigned)((stOtaFlag.active_app == 1U) ? 1U : 2U),
+              (unsigned long)spi_flash_table[PART_APP1].size_used);
+    return 0;
+}
+
+int upgrade_commit_ota_flag(uint32 len, uint32 crc32)
+{
+    ota_flag_t stOtaFlag = {0};
+    uint8_t cur_slot = 0;
+
+    CUSTOM_ASSERT(0 == len, return -1);
+
+    memset(&stOtaFlag, 0, sizeof(stOtaFlag));
+    stOtaFlag.len = len;
+    stOtaFlag.crc32 = crc32;
+    stOtaFlag.target_app = PART_APP1;
+#if (OTA_MODE == DUAL_APP)
+    cur_slot = ota_get_active_slot();
+    stOtaFlag.active_app = cur_slot;
+#else
+    stOtaFlag.active_app = 0;
+    (void)cur_slot;
+#endif
+    stOtaFlag.upgrade_flag = OTA_FLAG_UPGRADE_PENDING;
+    stOtaFlag.state = UPDATE_DOWNLOAD_OK;
+    stOtaFlag.magic = OTA_FLAG_MAGIC;
+
+    if (SPI_FLASH_WRITE(PART_OTA, 0, (uint8 *)&stOtaFlag, sizeof(ota_flag_t))) {
+        os_debug("upgrade_commit_ota_flag: write PART_OTA failed\r\n");
+        return -1;
+    }
+
+    spi_flash_table[PART_APP1].size_used = len;
+    os_printf("OTA stream commit: len=%lu crc=0x%08lx active_slot=%u\r\n",
+              (unsigned long)len, (unsigned long)crc32,
+              (unsigned)stOtaFlag.active_app);
     return 0;
 }
 

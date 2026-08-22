@@ -49,12 +49,6 @@ typedef os_mutex_t os_mutex;
         }                                               \
 }while (0)
 
-// #define os_mutex_del(p)                                 \
-//     do                                                  \
-//     {                                                   \
-//         vSemaphoreDelete((x))                           \
-// }while (0)
-
 #define os_mutex_destroy(x)            vSemaphoreDelete((x))
 #define os_task_create(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, pxCreatedTask)   \
                         xTaskCreate(pxTaskCode,      \

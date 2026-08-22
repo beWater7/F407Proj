@@ -2,22 +2,42 @@
 set -e
 
 cd "$(dirname "$0")"
+PROJ_ROOT="$(cd .. && pwd)"
+FLASH_SH="$PROJ_ROOT/flash.sh"
 
 # 用法:
-#   ./buildApp.sh        # 默认编译并烧录
-#   ./buildApp.sh 1      # 编译并烧录
-#   ./buildApp.sh 0      # 只编译不烧录
-#   ./buildApp.sh flash / noflash  同上
+#   ./buildApp.sh 1          # 编译后调 flash.sh 烧 APP（不烧 web）
+#   ./buildApp.sh flash      # 同上
+#   ./buildApp.sh 0          # 只编译不烧录
+#   ./buildApp.sh noflash    # 同上
 #
-# 也可用环境变量覆盖: FLASH=0 ./buildApp.sh
 usage() {
-  echo "Usage: $0 [0|1|flash|noflash]"
-  echo "  1 / flash    build + pyocd load (default)"
-  echo "  0 / noflash  build only"
+  cat <<EOF
+Usage: $0 <0|1|flash|noflash>
+
+Compile only here; flashing APP is ../flash.sh app.
+Web (SPI) is separate: ../flash.sh web
+
+Examples:
+  $0 1         # build, then flash.sh app
+  $0 flash     # same as 1
+  $0 0         # build only, skip flash
+  $0 noflash   # same as 0
+
+Options:
+  1 / flash / yes / y     build then flash APP
+  0 / noflash / no / n    build only
+  -h / --help / help      show this message
+
+EOF
   exit 1
 }
 
-FLASH_ARG="${1:-${FLASH:-1}}"
+if [ $# -eq 0 ]; then
+  usage
+fi
+
+FLASH_ARG="$1"
 case "$FLASH_ARG" in
   0|no|n|nof|noflash|NOFLASH)
     DO_FLASH=0
@@ -30,6 +50,7 @@ case "$FLASH_ARG" in
     ;;
   *)
     echo "ERROR: unknown arg '$FLASH_ARG'"
+    echo
     usage
     ;;
 esac
@@ -50,11 +71,10 @@ if [ ! -f build/app.bin ]; then
   exit 1
 fi
 echo "build success!"
+# upg.bin 由 Makefile all→upg 在编译后自动生成
 
 if [ "$DO_FLASH" -eq 1 ]; then
-  # APP 链接在 0x08008000（boot 占前 32K）
-  pyocd load build/app.bin -t stm32f407zgtx --base-address 0x08008000
-  echo "load app success!"
+  "$FLASH_SH" app
 else
   echo "skip flash (arg=$FLASH_ARG)"
 fi

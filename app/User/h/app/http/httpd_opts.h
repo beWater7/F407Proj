@@ -308,7 +308,8 @@
  * ATTENTION: This puts all connections on a linked list, so may be kind of slow.
  */
 #if !defined LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED || defined __DOXYGEN__
-#define LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED 0
+/* OTA 腾堆需要连接链表，以便关掉其它 GET 释放 web ReadBuffer */
+#define LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED 1
 #endif
 
 /** Set this to 1 to send URIs without extension without headers

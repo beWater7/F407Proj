@@ -4,13 +4,13 @@
   * @author  fire
   * @version V1.0
   * @date    2015-xx-xx
-  * @brief   内部FLASH读写测试范例
+  * @brief   ???FLASH???????????
   ******************************************************************************
   * @attention
   *
-  * 实验平台:野火  STM32 F407 开发板  
-  * 论坛    :http://www.firebbs.cn
-  * 淘宝    :https://fire-stm32.taobao.com
+  * ?????:???  STM32 F407 ??????  
+  * ???    :http://www.firebbs.cn
+  * ???    :https://fire-stm32.taobao.com
   *
   ******************************************************************************
   */
@@ -22,15 +22,15 @@
 
 
 
-/*准备写入的测试数据*/
+/*????????????????*/
 #define DATA_32                 ((uint32_t)0x00000000)
 #define OS_1KB  1024
 
 /* Exported types ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
-/* 要擦除内部FLASH的起始地址 */
+/* ????????FLASH???????? */
 #define FLASH_USER_START_ADDR   ADDR_FLASH_SECTOR_8   
-/* 要擦除内部FLASH的结束地址 */
+/* ????????FLASH???????? */
 #define FLASH_USER_END_ADDR     ADDR_FLASH_SECTOR_12  
 
 uint8_t g_bySectorMap = 0;
@@ -43,10 +43,10 @@ uint8_t g_bySectorMap = 0;
 #define SECTOR_12_ERASED (1 << 5)
 
 
-/* FLASH读写测试结果 */
-#define  TEST_ERROR    -1   /* 错误（擦除、写入错误） */
-#define  TEST_SUCCESS  0    /* 成功 */
-#define  TEST_FAILED   1    /* 失败 */
+/* FLASH??????????? */
+#define  TEST_ERROR    -1   /* ????????????????? */
+#define  TEST_SUCCESS  0    /* ??? */
+#define  TEST_FAILED   1    /* ??? */
 
 
 #define BufferSize 6
@@ -56,10 +56,10 @@ uint16_t usFlashReadBuf[BufferSize] = {0};
 
 
 typedef struct{
-    uint8_t bySector;       //扇区标号
-    uint32_t dwSectorAddr;  //扇区地址
+    uint8_t bySector;       //????????
+    uint32_t dwSectorAddr;  //???????
     uint8_t byHeaderSize;
-    uint32_t dwUsedSize; //已使用区域大小 
+    uint32_t dwUsedSize; //???????????? 
 }INTERNAL_FLASH_INFO;
 
 
@@ -71,13 +71,13 @@ INTERNAL_FLASH_INFO g_stInterFlashInfo[2] = {
 
 
 /**
-  * @brief  InternalFlash_Test,对内部FLASH进行读写测试
+  * @brief  InternalFlash_Test,?????FLASH????????????
   * @param  None
   * @retval None
   */
 int InternalFlash_Test(void)
 {
-	/*要擦除的起始扇区(包含)及结束扇区(不包含)，如8-12，表示擦除8、9、10、11扇区*/
+	/*??????????????(????)??????????(??????)????8-12?????????8??9??10??11????*/
 	uint32_t uwStartSector = 0;
 	uint32_t uwEndSector = 0;
 	
@@ -87,12 +87,12 @@ int InternalFlash_Test(void)
 	__IO uint32_t uwData32 = 0;
 	__IO uint32_t uwMemoryProgramStatus = 0;
 	
-  /* FLASH 解锁 ********************************/
-  /* 使能访问FLASH控制寄存器 */
+  /* FLASH ???? ********************************/
+  /* ??????FLASH???????? */
   FLASH_Unlock();
     
-  /* 擦除用户区域 (用户区域指程序本身没有使用的空间，可以自定义)**/
-  /* 清除各种FLASH的标志位 */  
+  /* ??????????? (????????????????????????????????)**/
+  /* ???????FLASH?????? */  
   FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
                   FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
 
@@ -100,17 +100,17 @@ int InternalFlash_Test(void)
 	uwStartSector = GetSector(FLASH_USER_START_ADDR);
 	uwEndSector = GetSector(FLASH_USER_END_ADDR);
 
-  /* 开始擦除操作 */
+  /* ??????????? */
   uwSectorCounter = uwStartSector;
   while (uwSectorCounter <= uwEndSector) 
   {
-    /* VoltageRange_3 以“字”的大小进行操作 */ 
+    /* VoltageRange_3 ??????????????????? */ 
     if (FLASH_EraseSector(uwSectorCounter, VoltageRange_3) != FLASH_COMPLETE)
     { 
-      /*擦除出错，返回，实际应用中可加入处理 */
+      /*?????????????????????????????? */
 			return -1;
     }
-    /* 计数器指向下一个扇区 */
+    /* ?????????????????? */
     if (uwSectorCounter == FLASH_Sector_11)
     {
       uwSectorCounter += 40;
@@ -121,7 +121,7 @@ int InternalFlash_Test(void)
     }
   }
 
-  /* 以“字”的大小为单位写入数据 ********************************/
+  /* ??????????????????????? ********************************/
   uwAddress = FLASH_USER_START_ADDR;
 
   while (uwAddress < FLASH_USER_END_ADDR)
@@ -132,19 +132,19 @@ int InternalFlash_Test(void)
     }
     else
     { 
-      /*写入出错，返回，实际应用中可加入处理 */
+      /*?????????????????????????????? */
 			return -1;
     }
   }
 	
 
-  /* 给FLASH上锁，防止内容被篡改*/
+  /* ??FLASH?????????????????*/
   FLASH_Lock(); 
 
 
-  /* 从FLASH中读取出数据进行校验***************************************/
-  /*  MemoryProgramStatus = 0: 写入的数据正确
-      MemoryProgramStatus != 0: 写入的数据错误，其值为错误的个数 */
+  /* ??FLASH??????????????????***************************************/
+  /*  MemoryProgramStatus = 0: ?????????????
+      MemoryProgramStatus != 0: ?????????????????????????? */
   uwAddress = FLASH_USER_START_ADDR;
   uwMemoryProgramStatus = 0;
   
@@ -159,12 +159,12 @@ int InternalFlash_Test(void)
 
     uwAddress = uwAddress + 4;
   }  
-  /* 数据校验不正确 */
+  /* ???????????? */
   if(uwMemoryProgramStatus)
   {    
 		return -1;
   }
-  else /*数据校验正确*/
+  else /*???????????*/
   { 
 		return 0;   
   }
@@ -173,20 +173,20 @@ int InternalFlash_Test(void)
 
 
 /*******************************************************************************************************
-** 函数: FlashReadWriteTest, 内部Flash读写测试函数
+** ????: FlashReadWriteTest, ???Flash???????????
 **------------------------------------------------------------------------------------------------------
-** 参数: void
-** 返回: TEST_ERROR：错误（擦除、写入错误）  TEST_SUCCESS：成功   TEST_FAILED：失败
-** 说明: 无
+** ????: void
+** ????: TEST_ERROR???????????????????  TEST_SUCCESS?????   TEST_FAILED?????
+** ???: ??
 ********************************************************************************************************/
 int FlashReadWriteTest(void)
 {
     uint32_t ucStartAddr;
     
-    /* 解锁 */
+    /* ???? */
     FLASH_Unlock(); 
     
-    /* 擦除操作 */
+    /* ???????? */
     ucStartAddr = 0x080C1000;
 //    if (FLASH_COMPLETE != FLASH_EraseSector(FLASH_Sector_10, VoltageRange_3))
 //    {
@@ -196,7 +196,7 @@ int FlashReadWriteTest(void)
 //    else
 //    {
 //        ucStartAddr = ADDR_FLASH_PAGE_255;
-//        printf("擦除成功，此时FLASH中值为：\n");
+//        printf("????????????FLASH??????\n");
 //        for (int i = 0; i < BufferSize; i++)
 //        {
 //            usFlashReadBuf[i] = *(uint32_t*)ucStartAddr;
@@ -204,9 +204,9 @@ int FlashReadWriteTest(void)
 //            ucStartAddr += 2;
 //        }
 //    }
-    /* 写入操作 */
+    /* ???????? */
     //ucStartAddr = 0x080E1000;
-    printf("\n往FLASH中写入的数据为：\n");
+    printf("\n??FLASH???????????????\n");
     for (int i = 0; i < BufferSize; i++)
     {
         if (FLASH_COMPLETE != FLASH_ProgramHalfWord(ucStartAddr, usFlashWriteBuf[i]))
@@ -218,10 +218,10 @@ int FlashReadWriteTest(void)
         ucStartAddr += 2;
     }
     
-    /* 上锁 */
+    /* ???? */
     FLASH_Lock();
     ucStartAddr = 0x080C1000;
-    printf("\n从FLASH中读出的数据为：\n");
+    printf("\n??FLASH???????????????\n");
     for (int i = 0; i < BufferSize; i++)
     {
         usFlashReadBuf[i] = *(__IO uint16_t*)ucStartAddr;
@@ -230,7 +230,7 @@ int FlashReadWriteTest(void)
     }
 
     
-    /* 读出的数据与写入的数据做比较 */
+    /* ??????????????????????????? */
     for (int i = 0; i < BufferSize; i++)
     {
         if (usFlashReadBuf[i] != usFlashWriteBuf[i])
@@ -245,12 +245,12 @@ int FlashReadWriteTest(void)
 
 
 /**
-  * @brief  根据输入的地址给出它所在的sector
-  *					例如：
+  * @brief  ??????????????????????sector
+  *					?????
 						uwStartSector = GetSector(FLASH_USER_START_ADDR);
 						uwEndSector = GetSector(FLASH_USER_END_ADDR);	
-  * @param  Address：地址
-  * @retval 地址所在的sector
+  * @param  Address?????
+  * @retval ????????sector
   */
 uint32_t GetSector(uint32_t Address)
 {
@@ -352,11 +352,14 @@ uint32_t GetSectorFlag(uint32_t dwSector)
 void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 {
     uint32_t i = 0;
+    (void)i;
     uint32_t word = 0;
-    uint8_t *orig_buf = buf;    // 保存原 buf 起始
+    uint8_t *orig_buf = buf;    // ????? buf ???
+    (void)orig_buf;
     uint32_t orig_size = size;
+    (void)orig_size;
 
-    // 如果 flash end 是闭区间 [start, end]，这里要用 >=
+    // ???? flash end ??????? [start, end]????????? >=
     CUSTOM_ASSERT(NULL == buf, return);
     CUSTOM_ASSERT(size <= 0, return);
 
@@ -368,7 +371,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 #if INTERNAL_FLASH_DEBUG
     printf("internal_flash_read addr:%08x size:%d\n", addr, size);
 #endif
-    // 按 word 读
+    // ?? word ??
     while (size >= 4)
     {
         word = *(__IO uint32_t *)addr;
@@ -383,7 +386,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
         size -= 4;
     }
 
-    // 剩下不足 4 字节
+    // ?????? 4 ???
     while (size--)
     {
         *buf++ = *(__IO uint8_t *)addr++;
@@ -391,7 +394,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 
 
 #if INTERNAL_FLASH_DEBUG       
-    // 用保存的 orig_buf 和 orig_size
+    // ??????? orig_buf ?? orig_size
     for (i = 0; i < orig_size; i++)
     {
         printf("%02X ", orig_buf[i]);
@@ -414,56 +417,65 @@ void internal_flash_write(uint32_t addr, uint8_t *buf, uint32_t size)
 {
     uint32_t end_addr = addr + size;
     uint32_t i = 0;
+    (void)i;
     uint32_t dwFirstSector = 0;
     uint32_t dwLastSector = 0;
+    (void)dwLastSector;
     uint8_t byFlag = 0;
+    (void)byFlag;
     uint32_t start_align_offset = addr % 4;
     uint32_t first_word_addr = addr - start_align_offset;
+    (void)first_word_addr;
 
-    /* 写入地址和长度校验 */
+    /* ???????????????? */
     CUSTOM_ASSERT(end_addr > ADDR_FLASH_SECTOR_12, return);
     CUSTOM_ASSERT(size < 1, return);
 
     /* Get the 1st sector to erase */
     dwFirstSector = GetSector(addr);
     byFlag = GetSectorFlag(dwFirstSector);
+    (void)byFlag;
 
 #if INTERNAL_FLASH_DEBUG
     os_printf(" internal_flash_table[i].size_used:%d \n", internal_flash_table[i].size_used);
 #endif
     FLASH_Unlock();
 
-    /* 清除各种FLASH的标志位 */  
+    /* ???????FLASH?????? */  
     FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
                     FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
     #if 0
     /* Get the 1st sector to erase */
     dwFirstSector = GetSector(addr);
     byFlag = GetSectorFlag(dwFirstSector);
+    (void)byFlag;
     g_bySectorMap &= ~byFlag;
 
     dwLastSector = GetSector(end_addr);
+    (void)dwLastSector;
     byFlag = GetSectorFlag(dwLastSector);
+    (void)byFlag;
     g_bySectorMap &= ~byFlag;
 
-    /* 标记中间的扇区已写入 */
+    /* ?????????????????? */
     while(dwFirstSector < dwLastSector)
     {
         dwFirstSector += 8;
         byFlag = GetSectorFlag(dwFirstSector);
+        (void)byFlag;
         g_bySectorMap &= ~byFlag;
     }
     #endif
 #if INTERNAL_FLASH_DEBUG
     os_printf(" internal_flash_write addr:0x%08x size:%d\n", addr, size);
 #endif
-    /* 按字节写入数据到内部flash，其实可以按16位或32位写入，但是代码会更复杂写，需要考虑未对齐的情况 */
+    /* ?????????????????flash??????????16????32??????????????????????????????????????? */
     while (size > 0)
     {
-        uint32_t aligned_addr = addr & ~0x3;  // 4字节对齐
+        uint32_t aligned_addr = addr & ~0x3;  // 4??????
         uint32_t word = *(__IO uint32_t*)aligned_addr;
 
-        uint8_t offset = addr & 0x3; // 当前地址在Word里的偏移
+        uint8_t offset = addr & 0x3; // ????????Word???????
         while (offset < 4 && size > 0)
         {
             ((uint8_t*)&word)[offset] = *buf;
@@ -497,7 +509,9 @@ void internal_flash_erase(uint32_t addr)
 {
     uint32_t dwFirstSector = 0;
     uint32_t dwLastSector = 0;
+    (void)dwLastSector;
     uint8_t byFlag = 0;
+    (void)byFlag;
     uint8_t i = 0;
 
 #if 1
@@ -514,35 +528,36 @@ void internal_flash_erase(uint32_t addr)
     {
         if( addr == internal_flash_table[i].start_addr)
         {
-            /* 找到对应地址*/
+            /* ?????????*/
             break;
         }
     }
 
-    /* 分区的最后sector */
+    /* ?????????sector */
     dwLastSector = GetSector(internal_flash_table[i].start_addr + internal_flash_table[i].size - 1);
+    (void)dwLastSector;
 
 #if INTERNAL_FLASH_DEBUG
     printf("internal_flash_erase addr:0x%08x dwFirstSector:0x%04x dwLastSector:0x%04x\n", addr, dwFirstSector, dwLastSector);
 #endif
 
-    /* 仅当擦除地址为管理头地址时, 支持擦除整个分区 */
+    /* ?????????????????????, ?????????????? */
     if(addr == internal_flash_table[i].start_addr)
     {
         /* Unlock the Flash to enable the flash control register access */
         FLASH_Unlock();
 
-        /* 清除各种FLASH的标志位 */  
+        /* ???????FLASH?????? */  
         FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
                         FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
 
         if(dwLastSector >= dwFirstSector)
         {
-            /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
+            /* VoltageRange_3 ?????(32??)????????????????????????????????? */ 
             if (FLASH_EraseSector(dwFirstSector, VoltageRange_3) != FLASH_COMPLETE)
             {
                 os_debug("FLASH_EraseSector err!\n");
-                /*擦除出错，返回，实际应用中可加入处理 */
+                /*?????????????????????????????? */
                 return;
             }
             dwFirstSector += 8;
@@ -551,13 +566,13 @@ void internal_flash_erase(uint32_t addr)
 #endif
         }
 
-        /* 标记某个扇区已擦除 */
+        /* ???????????????? */
         //g_bySectorMap |= byFlag;
 
         FLASH_Lock();
     }
 #endif
-    /* internal flash仅支持顺序写, 不考虑覆盖写的擦除问题 */
+    /* internal flash??????????, ???????????????????? */
     return;
 }
 #endif
@@ -574,15 +589,15 @@ void internal_flash_erase(uint32_t addr)
     /* Unlock the Flash to enable the flash control register access */
     FLASH_Unlock();
     
-    /* 清除各种FLASH的标志位 */  
+    /* ???????FLASH?????? */  
     FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR | 
                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
 
-    /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
+    /* VoltageRange_3 ?????(32??)????????????????????????????????? */ 
     if (FLASH_EraseSector(addr, VoltageRange_3) != FLASH_COMPLETE)
     {
         os_debug("FLASH_EraseSector err!\n");
-        /*擦除出错，返回，实际应用中可加入处理 */
+        /*?????????????????????????????? */
         return;
     }
 
@@ -603,7 +618,7 @@ void internal_flash_erase_all(void)
     /* Unlock the Flash to enable the flash control register access */
     FLASH_Unlock();
 
-    /* 清除各种FLASH的标志位 */  
+    /* ???????FLASH?????? */  
     FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR | 
                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR); 
 

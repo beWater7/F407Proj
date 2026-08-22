@@ -1,6 +1,9 @@
 #include "iap.h"
 #include <stdio.h>
 #include <string.h>
+#include "upgrade.h"
+#include "flash_manage.h"
+#include "bsp_led.h"
 
 /*********************************************************************
   +----------------------------+
@@ -233,12 +236,85 @@ void show_boot_info(void)
 }
 
 typedef void (*jump_callback)(void);
+
 /**
- * @note ��ת��App����
+ * @brief  校验指定基址是否有可跳转的 APP 镜像
+ * @note   要求：MSP 落在内部 SRAM；Reset_Handler 为 Thumb 且落在本 bank 内。
+ *         因此「把 APP1 链接产物原样拷到 APP2」会被判定非法——Reset 仍指向 0x08008xxx。
+ *         真双区需要 APP2 单独以 0x08060000 为 ORIGIN 链接。
+ */
+uint8_t app_image_valid(uint32_t app_addr)
+{
+    uint32_t msp;
+    uint32_t reset;
+
+    if ((app_addr != APP1_ADDRESS) && (app_addr != APP2_ADDRESS)) {
+        return 0;
+    }
+
+    msp = *(volatile uint32_t *)app_addr;
+    reset = *(volatile uint32_t *)(app_addr + 4U);
+
+    if (msp < 0x20000000u || msp > 0x20020000u) {
+        return 0;
+    }
+    /* Thumb 入口 bit0 必须为 1 */
+    if ((reset & 1U) == 0U) {
+        return 0;
+    }
+    reset &= ~1U;
+    if (reset < app_addr || reset >= (app_addr + APP_FLASH_SIZE)) {
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief  按 OTA active_app 选择跳转地址，无效则回退另一 bank / APP1
+ */
+uint32_t boot_resolve_app_addr(void)
+{
+    ota_flag_t stOtaFlag = {0};
+    uint32_t preferred;
+    uint32_t other;
+
+#if OTA_REGION_SPI_FLASH
+    SPI_FLASH_READ(PART_OTA, 0, (uint8_t *)&stOtaFlag, sizeof(stOtaFlag));
+#else
+    INTERNAL_FLASH_READ(PART_RES, 0, (uint8_t *)&stOtaFlag, sizeof(stOtaFlag));
+#endif
+
+    /* active_app: 0=APP1, 1=APP2；无有效 magic 时默认 APP1 */
+    if (stOtaFlag.magic == OTA_FLAG_MAGIC && stOtaFlag.active_app == 1U) {
+        preferred = APP2_ADDRESS;
+        other = APP1_ADDRESS;
+    } else {
+        preferred = APP1_ADDRESS;
+        other = APP2_ADDRESS;
+    }
+
+    BOOTL_PRINT(BOOT_INFO"boot select: active_app=%lu prefer=0x%08lx\n",
+                (unsigned long)stOtaFlag.active_app,
+                (unsigned long)preferred);
+
+    if (app_image_valid(preferred)) {
+        return preferred;
+    }
+    BOOTL_PRINT(BOOT_WARN"prefer bank invalid, try 0x%08lx\n", (unsigned long)other);
+    if (app_image_valid(other)) {
+        return other;
+    }
+    /* 不再假装 APP1 可用：返回 0 让 main 留在 boot */
+    BOOTL_PRINT(BOOT_ERROR"no valid APP image\n");
+    return 0;
+}
+
+/**
+ * @note 跳转到 App 程序
  *
- * @param App��ʼ��ַ
+ * @param App起始地址
  *
- * @return result
+ * @return 1 已跳转（正常不会返回） 0 镜像非法
  */
 uint8_t jump_app(uint32_t app_addr)
 {
@@ -246,32 +322,28 @@ uint8_t jump_app(uint32_t app_addr)
     uint32_t msp;
     jump_callback cb;
 
-    /* F407ZG �ڲ� SRAM: 0x20000000 ~ 0x2001FFFF (128KB)��
-     * ���ӽű����� _estack = ORIGIN+LENGTH = 0x20020000��ջ����һ��Խ�硱�� Cortex-M �������Ϸ�����
-     * ST ʾ������ (msp & 0x2FFE0000) == 0x20000000 ��� 0x20020000 ��Ϊ�Ƿ���
-     * ���� jump ��Զʧ�ܡ����� boot �� while(1)��APP ��ȫ������� */
-    msp = *(volatile uint32_t *)app_addr;
-    if (msp >= 0x20000000u && msp <= 0x20020000u)
-    {
-        /* 复位向量位于程序起始地址+4处, 即 Reset_Handler */
-        jump_addr = *(volatile uint32_t *)(app_addr + 4);
-
-        cb = (jump_callback)jump_addr;
-
-        /* 必须先切 VTOR，再跳 APP；否则 APP 里 svc/PendSV/外设中断仍进 Boot 向量表 */
-        __disable_irq();
-        SCB->VTOR = app_addr;
-        __DSB();
-        __ISB();
-
-        __set_MSP(msp);
-        __enable_irq();
-
-        cb();
-
-        return 1;
+    if (!app_image_valid(app_addr)) {
+        BOOTL_PRINT(BOOT_ERROR"jump_app: invalid image @0x%08lx\n",
+                    (unsigned long)app_addr);
+        return 0;
     }
-    return 0;
+
+    msp = *(volatile uint32_t *)app_addr;
+    jump_addr = *(volatile uint32_t *)(app_addr + 4U);
+    cb = (jump_callback)jump_addr;
+
+    /* 必须先切 VTOR，再跳 APP；否则 APP 里 svc/PendSV/外设中断仍进 Boot 向量表。
+     * 跳转前保持关中断：Boot 外设可能仍有 pending，开中断会在 APP 未初始化时取 APP 向量 SoftFault。 */
+    __disable_irq();
+    SCB->VTOR = app_addr;
+    __DSB();
+    __ISB();
+
+    __set_MSP(msp);
+
+    cb(); /* 不返回；由 APP 自己在就绪后 __enable_irq() */
+
+    return 1;
 }
 
 
@@ -433,6 +505,9 @@ void PrintProgressBar(uint32_t size, uint32_t total_size)
     }
     preProgress = progress;
 
+    /* progress change: blink blue LED */
+    LED3_TOGGLE;
+
     /* ÿ����5�����ӡһ�ν��ȱ� */
     if(0 != (progress%5))
     {
@@ -501,6 +576,7 @@ int stm32_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 int stm32_flash_write(uint32_t addr, const uint8_t *buf, uint32_t size)
 {
     int8_t result = 0;
+    (void)result;
     uint32_t end_addr = addr + size;
 
 		/* д���ַ�ͳ���У�� */
@@ -530,12 +606,14 @@ int stm32_flash_write(uint32_t addr, const uint8_t *buf, uint32_t size)
             if (*(uint8_t *)addr != *buf)
             {
                 result = -1;
+                (void)result;
                 break;
             }
         }
         else
         {
             result = -1;
+            (void)result;
             break;
         }
     }
@@ -543,6 +621,7 @@ int stm32_flash_write(uint32_t addr, const uint8_t *buf, uint32_t size)
     FLASH_Lock();
 
     return result;
+    (void)result;
 }
 
 /**
@@ -558,8 +637,11 @@ int stm32_flash_write(uint32_t addr, const uint8_t *buf, uint32_t size)
 int stm32_flash_erase(uint32_t addr, uint32_t size)
 {
     int8_t result = 0;
+    (void)result;
     uint32_t FirstSector = 0, LastSector = 0, NbOfSectors = 0;
+    (void)NbOfSectors;
     uint32_t SECTORError = 0;
+    (void)SECTORError;
 
     if ((addr + size) > STM32_FLASH_END_ADDRESS)
     {

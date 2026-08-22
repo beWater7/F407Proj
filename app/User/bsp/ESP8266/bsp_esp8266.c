@@ -26,11 +26,11 @@
 #include "bsp_systick.h"
 #include "core_delay.h"
 #include "safe_utils.h"
+#include "flash_manage.h"
+#include "crc.h"
+#include "devConfig.h"
 
-/* 野火旧工程宏；FreeRTOS 下常用 Group_4 */
-#ifndef macNVIC_PriorityGroup_x
-#define macNVIC_PriorityGroup_x  NVIC_PriorityGroup_4
-#endif
+/* USART3 优先级必须低于 SysTick/PendSV，且不要在调度器起来后改 NVIC 分组 */
 
 void ESP8266_Usart_Printf(const char *fmt, ...)
 {
@@ -67,8 +67,19 @@ static void                   ESP8266_USART_NVIC_Configuration    ( void );
 
 struct  STRUCT_USARTx_Fram strEsp8266_Fram_Record = { 0 };
 struct  STRUCT_USARTx_Fram strUSART_Fram_Record = { 0 };
-static char gs_esp8266_ssid[32];
-static char gs_esp8266_psk[32];
+static char gs_esp8266_ssid[ESP8266_SSID_MAX + 1];
+static char gs_esp8266_psk[ESP8266_PSK_MAX + 1];
+static volatile wifi_apply_state_t gs_wifi_apply = WIFI_APPLY_IDLE;
+static char gs_wifi_apply_err[48];
+
+#define WIFI_CRED_MAGIC  0x57494631u /* 'WIF1' */
+
+typedef struct {
+    uint32_t magic;
+    uint32_t crc;
+    char ssid[ESP8266_SSID_MAX + 1];
+    char psk[ESP8266_PSK_MAX + 1];
+} wifi_cred_nv_t;
 
 char *getEsp8266Ssid(void)
 {
@@ -80,18 +91,131 @@ char *getEsp8266Psk(void)
     return gs_esp8266_psk;
 }
 
+static void esp8266_copy_cred(char *dst, size_t dstsz, const char *src)
+{
+    size_t n;
+
+    if (!dst || dstsz == 0) {
+        return;
+    }
+    memset(dst, 0, dstsz);
+    if (!src) {
+        return;
+    }
+    n = strlen(src);
+    if (n >= dstsz) {
+        n = dstsz - 1U;
+    }
+    memcpy(dst, src, n);
+}
+
 void setEsp8266Ssid(char *ssid)
 {
     CUSTOM_ASSERT(!ssid, return);
-    memset_s(gs_esp8266_ssid, sizeof(gs_esp8266_ssid), 0,  sizeof(gs_esp8266_ssid));
-    memcpy_s(gs_esp8266_ssid, sizeof(gs_esp8266_ssid), ssid, strlen(ssid));
+    esp8266_copy_cred(gs_esp8266_ssid, sizeof(gs_esp8266_ssid), ssid);
 }
 
 void setEsp8266Psk(char *psk)
 {
     CUSTOM_ASSERT(!psk, return);
-    memset_s(gs_esp8266_psk, sizeof(gs_esp8266_psk), 0, sizeof(gs_esp8266_psk));
-    memcpy_s(gs_esp8266_psk, sizeof(gs_esp8266_psk), psk, strlen(psk));
+    esp8266_copy_cred(gs_esp8266_psk, sizeof(gs_esp8266_psk), psk);
+}
+
+static const char *wifi_apply_name(wifi_apply_state_t st)
+{
+    switch (st) {
+    case WIFI_APPLY_PENDING:     return "pending";
+    case WIFI_APPLY_CONNECTING:  return "connecting";
+    case WIFI_APPLY_OK:          return "ok";
+    case WIFI_APPLY_FAIL:        return "fail";
+    case WIFI_APPLY_IDLE:
+    default:                     return "idle";
+    }
+}
+
+const char *ESP8266_WifiApplyStateStr(void)
+{
+    return wifi_apply_name(gs_wifi_apply);
+}
+
+wifi_apply_state_t ESP8266_WifiApplyState(void)
+{
+    return gs_wifi_apply;
+}
+
+const char *ESP8266_WifiApplyError(void)
+{
+    return gs_wifi_apply_err;
+}
+
+void ESP8266_WifiApplySet(wifi_apply_state_t st, const char *err)
+{
+    gs_wifi_apply = st;
+    memset(gs_wifi_apply_err, 0, sizeof(gs_wifi_apply_err));
+    if (err) {
+        esp8266_copy_cred(gs_wifi_apply_err, sizeof(gs_wifi_apply_err), err);
+    }
+}
+
+int ESP8266_WifiCredSave(void)
+{
+    if (setWifiStaParam(gs_esp8266_ssid, gs_esp8266_psk) != RET_OK) {
+        os_debug("wifi cred save to param fail\r\n");
+        return -1;
+    }
+    /* 只置位，由 devParamMng_task 写 Flash。SaveNow 会在 httpd/tcpip 里擦扇区，ping/网页会一起断 */
+    devParamSave();
+    return 0;
+}
+
+static int wifi_cred_load_legacy(void)
+{
+    wifi_cred_nv_t nv;
+    uint32_t crc;
+
+    memset(&nv, 0, sizeof(nv));
+    if (SPI_FLASH_READ(PART_CUSTOM, 0, (uint8_t *)&nv, sizeof(nv)) != 0) {
+        return -1;
+    }
+    if (nv.magic != WIFI_CRED_MAGIC) {
+        return -1;
+    }
+    crc = crc32_checksum((const unsigned char *)nv.ssid,
+                         sizeof(nv.ssid) + sizeof(nv.psk));
+    if (crc != nv.crc) {
+        os_debug("wifi cred crc mismatch\r\n");
+        return -1;
+    }
+    nv.ssid[ESP8266_SSID_MAX] = '\0';
+    nv.psk[ESP8266_PSK_MAX] = '\0';
+    if (nv.ssid[0] == '\0') {
+        return -1;
+    }
+    setEsp8266Ssid(nv.ssid);
+    setEsp8266Psk(nv.psk);
+    return 0;
+}
+
+int ESP8266_WifiCredLoad(void)
+{
+    char ssid[WIFI_SSID_MAX + 1];
+    char psk[WIFI_PSK_MAX + 1];
+
+    memset(ssid, 0, sizeof(ssid));
+    memset(psk, 0, sizeof(psk));
+    if (getWifiStaParam(ssid, sizeof(ssid), psk, sizeof(psk)) == RET_OK && ssid[0] != '\0') {
+        setEsp8266Ssid(ssid);
+        setEsp8266Psk(psk);
+        os_printf("wifi cred loaded from param, ssid_len=%u\r\n", (unsigned)strlen(ssid));
+        return 0;
+    }
+    if (wifi_cred_load_legacy() == 0) {
+        (void)ESP8266_WifiCredSave();
+        os_printf("wifi cred migrated to param, ssid_len=%u\r\n",
+                  (unsigned)strlen(gs_esp8266_ssid));
+        return 0;
+    }
+    return -1;
 }
 
 /**
@@ -112,6 +236,20 @@ void ESP8266_Init ( void )
 	setEsp8266Ssid(macUser_ESP8266_ApSsid);
 
 	setEsp8266Psk(macUser_ESP8266_ApPwd);
+
+	if (ESP8266_WifiCredLoad() == 0) {
+		os_printf("ESP8266: cred ok, auto-connect after recv task starts\r\n");
+	} else {
+		os_printf("ESP8266: no saved cred, use default ssid=%s\r\n",
+		          getEsp8266Ssid());
+	}
+	/* 只把凭据装进 RAM、CH_PD 仍为低。真正 AT+CWJAP 在 recv 任务里异步做，
+	 * 避免在 app_main 里忙等把 httpd 卡死。 */
+	if (getEsp8266Ssid() && getEsp8266Ssid()[0] != '\0') {
+		ESP8266_RequestWifiReconfig();
+	} else {
+		ESP8266_WifiApplySet(WIFI_APPLY_IDLE, NULL);
+	}
 }
 
 
@@ -190,18 +328,14 @@ static void ESP8266_USART_Config ( void )
 	USART_InitStructure.USART_HardwareFlowControl = USART_HardwareFlowControl_None;
 	USART_InitStructure.USART_Mode = USART_Mode_Rx | USART_Mode_Tx;
 	USART_Init(macESP8266_USARTx, &USART_InitStructure);
-	
-	
-	/* �ж����� */
-	USART_ITConfig ( macESP8266_USARTx, USART_IT_RXNE, ENABLE ); //ʹ�ܴ��ڽ����ж� 
-	USART_ITConfig ( macESP8266_USARTx, USART_IT_IDLE, ENABLE ); //ʹ�ܴ������߿����ж� 	
 
-	ESP8266_USART_NVIC_Configuration ();
-	
-	
+	/* 先配好 NVIC，RX 中断等 CH_PD 拉高再开，避免模组 TX 浮空/噪声打满 ISR */
+	USART_ITConfig(macESP8266_USARTx, USART_IT_RXNE, DISABLE);
+	USART_ITConfig(macESP8266_USARTx, USART_IT_IDLE, DISABLE);
+
+	ESP8266_USART_NVIC_Configuration();
+
 	USART_Cmd(macESP8266_USARTx, ENABLE);
-	
-	
 }
 
 
@@ -212,19 +346,49 @@ static void ESP8266_USART_Config ( void )
   */
 static void ESP8266_USART_NVIC_Configuration ( void )
 {
-	NVIC_InitTypeDef NVIC_InitStructure; 
-	
-	
-	/* Configure the NVIC Preemption Priority Bits */  
-	NVIC_PriorityGroupConfig ( macNVIC_PriorityGroup_x );
+	NVIC_InitTypeDef NVIC_InitStructure;
 
-	/* Enable the USART2 Interrupt */
-	NVIC_InitStructure.NVIC_IRQChannel = macESP8266_USART_IRQ;	 
-	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 0;
+	/* 不要在这里改 PriorityGroup：Debug USART 已设 Group_2，调度后再改会打乱 SysTick/ETH */
+	NVIC_InitStructure.NVIC_IRQChannel = macESP8266_USART_IRQ;
+	NVIC_InitStructure.NVIC_IRQChannelPreemptionPriority = 6;
 	NVIC_InitStructure.NVIC_IRQChannelSubPriority = 0;
 	NVIC_InitStructure.NVIC_IRQChannelCmd = ENABLE;
 	NVIC_Init(&NVIC_InitStructure);
+}
 
+void ESP8266_USART_RxIrqCtrl(int enable)
+{
+	if (enable) {
+		(void)macESP8266_USARTx->SR;
+		(void)macESP8266_USARTx->DR;
+		USART_ITConfig(macESP8266_USARTx, USART_IT_RXNE, ENABLE);
+		USART_ITConfig(macESP8266_USARTx, USART_IT_IDLE, ENABLE);
+	} else {
+		USART_ITConfig(macESP8266_USARTx, USART_IT_RXNE, DISABLE);
+		USART_ITConfig(macESP8266_USARTx, USART_IT_IDLE, DISABLE);
+		(void)macESP8266_USARTx->SR;
+		(void)macESP8266_USARTx->DR;
+	}
+}
+
+/*
+ * USART3 RX：启动文件里 USART3_IRQHandler 是弱符号 Default_Handler。
+ * CH_PD 拉高后模组会立刻吐启动日志，没有本 ISR 就会卡死在 enable ESP8266 之后。
+ * 一次读 SR+DR，同时清 RXNE/IDLE/ORE，避免标志清不掉造成中断风暴饿死 ETH 轮询。
+ */
+void macESP8266_USART_INT_FUN(void)
+{
+	uint32_t sr = macESP8266_USARTx->SR;
+	uint8_t ucCh = (uint8_t)macESP8266_USARTx->DR;
+
+	if (sr & USART_FLAG_RXNE) {
+		if (strEsp8266_Fram_Record.InfBit.FramLength < (RX_BUF_MAX_LEN - 1U)) {
+			strEsp8266_Fram_Record.Data_RX_BUF[strEsp8266_Fram_Record.InfBit.FramLength++] = (char)ucCh;
+		}
+	}
+	if (sr & USART_FLAG_IDLE) {
+		strEsp8266_Fram_Record.InfBit.FramFinishFlag = 1;
+	}
 }
 
 
@@ -282,6 +446,9 @@ bool ESP8266_Cmd ( char * cmd, char * reply1, char * reply2, u32 waittime )
 	Delay_ms ( waittime );                 //��ʱ
 	
 	/* resp from esp8266 */
+	if (strEsp8266_Fram_Record.InfBit.FramLength >= RX_BUF_MAX_LEN) {
+		strEsp8266_Fram_Record.InfBit.FramLength = RX_BUF_MAX_LEN - 1U;
+	}
 	strEsp8266_Fram_Record .Data_RX_BUF [ strEsp8266_Fram_Record .InfBit .FramLength ]  = '\0';
 
 	macPC_Usart ( "%s", strEsp8266_Fram_Record .Data_RX_BUF );
@@ -402,13 +569,51 @@ bool ESP8266_Net_Mode_Choose ( ENUM_Net_ModeTypeDef enumMode )
  *         0������ʧ��
  * ����  �����ⲿ����
  */
+/* AT 字符串转义：\ -> \\ , " -> \" */
+static int esp8266_at_escape(char *dst, size_t dstsz, const char *src)
+{
+    size_t o = 0;
+
+    if (!dst || dstsz == 0 || !src) {
+        return -1;
+    }
+    while (*src) {
+        if (*src == '\\' || *src == '"') {
+            if (o + 2 >= dstsz) {
+                return -1;
+            }
+            dst[o++] = '\\';
+            dst[o++] = *src++;
+        } else {
+            if (o + 1 >= dstsz) {
+                return -1;
+            }
+            dst[o++] = *src++;
+        }
+    }
+    dst[o] = '\0';
+    return 0;
+}
+
 bool ESP8266_JoinAP ( char * pSSID, char * pPassWord )
 {
-	char cCmd [120] = {0};
+	char cCmd [160] = {0};
+	char ssid_esc[ESP8266_SSID_MAX * 2 + 1];
+	char psk_esc[ESP8266_PSK_MAX * 2 + 1];
 
-	sprintf ( cCmd, "AT+CWJAP=\"%s\",\"%s\"", pSSID, pPassWord );
-	
-	return ESP8266_Cmd ( cCmd, "OK", NULL, 5000 );
+	CUSTOM_ASSERT(!pSSID || !pPassWord, return false);
+	if (esp8266_at_escape(ssid_esc, sizeof(ssid_esc), pSSID) != 0) {
+		return false;
+	}
+	if (esp8266_at_escape(psk_esc, sizeof(psk_esc), pPassWord) != 0) {
+		return false;
+	}
+	if (snprintf_s(cCmd, sizeof(cCmd), sizeof(cCmd) - 1,
+	               "AT+CWJAP=\"%s\",\"%s\"", ssid_esc, psk_esc) < 0) {
+		return false;
+	}
+
+	return ESP8266_Cmd ( cCmd, "WIFI GOT IP", "OK", 15000 );
 
 }
 
@@ -488,6 +693,10 @@ bool ESP8266_Link_Server ( ENUM_NetPro_TypeDef enumE, char * ip, char * ComNum, 
 		case enumUDP:
 		  sprintf ( cStr, "\"%s\",\"%s\",%s", "UDP", ip, ComNum );
 		  break;
+
+		case enumSSL:
+		  sprintf ( cStr, "\"%s\",\"%s\",%s", "SSL", ip, ComNum );
+		  break;
 		
 		default:
 			break;
@@ -499,7 +708,8 @@ bool ESP8266_Link_Server ( ENUM_NetPro_TypeDef enumE, char * ip, char * ComNum, 
   else
 	  sprintf ( cCmd, "AT+CIPSTART=%s", cStr );
 
-	return ESP8266_Cmd ( cCmd, "OK", "ALREAY CONNECT", 4000 );
+	/* SSL 握手耗时较长，给足时间 */
+	return ESP8266_Cmd ( cCmd, "OK", "ALREAY CONNECT", (enumE == enumSSL) ? 10000 : 4000 );
 	
 }
 
@@ -626,7 +836,7 @@ uint8_t ESP8266_Get_IdLinkStatus ( void )
  */
 uint8_t ESP8266_Inquire_ApIp ( char * pApIp, uint8_t ucArrayLength )
 {
-	char uc;
+	uint8_t uc;
 	
 	char * pCh;
 	
@@ -669,7 +879,7 @@ uint8_t ESP8266_Inquire_ApIp ( char * pApIp, uint8_t ucArrayLength )
  */
 uint8_t ESP8266_Inquire_StaIp ( char * pApIp, uint8_t ucArrayLength )
 {
-	char uc;
+	uint8_t uc;
 	
 	char * pCh;
 	
@@ -766,10 +976,10 @@ bool ESP8266_SendString ( FunctionalState enumEnUnvarnishTx, char * pStr, u32 ul
 	else
 	{
 		if ( ucId < 5 )
-			sprintf ( cStr, "AT+CIPSEND=%d,%d", ucId, ulStrLength + 2 );
+			sprintf ( cStr, "AT+CIPSEND=%d,%u", ucId, (unsigned)(ulStrLength + 2) );
 
 		else
-			sprintf ( cStr, "AT+CIPSEND=%d", ulStrLength + 2 );
+			sprintf ( cStr, "AT+CIPSEND=%u", (unsigned)(ulStrLength + 2) );
 		
 		ESP8266_Cmd ( cStr, "> ", 0, 100 );
 

@@ -27,6 +27,7 @@ typedef enum{
 typedef enum{
 	 enumTCP,
 	 enumUDP,
+	 enumSSL,
 } ENUM_NetPro_TypeDef;
 	
 
@@ -121,6 +122,7 @@ void ESP8266_Usart_Printf(const char *fmt, ...);
 
 /****************************************** ESP8266 �������� ***********************************************/
 void                     ESP8266_Init                        ( void );
+void                     ESP8266_USART_RxIrqCtrl             ( int enable );
 void                     ESP8266_Rst                         ( void );
 bool                     ESP8266_Cmd                         ( char * cmd, char * reply1, char * reply2, u32 waittime );
 bool                     ESP8266_AT_Test                     ( void );
@@ -150,8 +152,30 @@ bool ESP8266_leave_AP ( void );
 char *getEsp8266Ssid(void);
 char *getEsp8266Psk(void);
 
+#ifndef ESP8266_SSID_MAX
+#define ESP8266_SSID_MAX 32
+#endif
+#ifndef ESP8266_PSK_MAX
+#define ESP8266_PSK_MAX  63
+#endif
+
 void setEsp8266Ssid(char *ssid);
 void setEsp8266Psk(char *psk);
+
+typedef enum {
+    WIFI_APPLY_IDLE = 0,
+    WIFI_APPLY_PENDING,
+    WIFI_APPLY_CONNECTING,
+    WIFI_APPLY_OK,
+    WIFI_APPLY_FAIL
+} wifi_apply_state_t;
+
+const char *ESP8266_WifiApplyStateStr(void);
+wifi_apply_state_t ESP8266_WifiApplyState(void);
+const char *ESP8266_WifiApplyError(void);
+void ESP8266_WifiApplySet(wifi_apply_state_t st, const char *err);
+int ESP8266_WifiCredLoad(void);
+int ESP8266_WifiCredSave(void);
 #endif
 
 

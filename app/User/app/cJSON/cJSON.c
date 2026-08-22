@@ -33,6 +33,7 @@
 #include "cJSON.h"
 /*stm32  基于SRAM实现的 malloc added by liudayi */
 #include "malloc.h"
+#include "FreeRTOS.h"
 
 static const char *ep;
 
@@ -45,8 +46,9 @@ static int cJSON_strcasecmp(const char *s1,const char *s2)
 	return tolower(*(const unsigned char *)s1) - tolower(*(const unsigned char *)s2);
 }
 
-static void *(*cJSON_malloc)(size_t sz) = malloc; //malloc ->mymalloc modified by liudayi
-static void (*cJSON_free)(void *ptr) = free;  //free->os_free 
+/* 必须用 FreeRTOS 堆：newlib malloc 未正确接入时一用 cJSON 就 HardFault，网页表现为无响应 */
+static void *(*cJSON_malloc)(size_t sz) = pvPortMalloc;
+static void (*cJSON_free)(void *ptr) = vPortFree;
 
 static char* cJSON_strdup(const char* str)
 {
@@ -62,13 +64,13 @@ static char* cJSON_strdup(const char* str)
 void cJSON_InitHooks(cJSON_Hooks* hooks)
 {
     if (!hooks) { /* Reset hooks */
-        cJSON_malloc = malloc;
-        cJSON_free = free;
+        cJSON_malloc = pvPortMalloc;
+        cJSON_free = vPortFree;
         return;
     }
 
-	cJSON_malloc = (hooks->malloc_fn)?hooks->malloc_fn:malloc;
-	cJSON_free	 = (hooks->free_fn)?hooks->free_fn:free;
+	cJSON_malloc = (hooks->malloc_fn)?hooks->malloc_fn:pvPortMalloc;
+	cJSON_free	 = (hooks->free_fn)?hooks->free_fn:vPortFree;
 }
 
 /* Internal constructor. */
@@ -352,6 +354,41 @@ char *cJSON_PrintBuffered(cJSON *item,int prebuffer,int fmt)
 	p.offset=0;
 	return print_value(item,0,fmt,&p);
 	return p.buffer;
+}
+
+cJSON *cJSON_AddObjectToObject(cJSON *object, const char *name)
+{
+	cJSON *obj = cJSON_CreateObject();
+	if (!obj) {
+		return 0;
+	}
+	cJSON_AddItemToObject(object, name, obj);
+	return obj;
+}
+
+int cJSON_PrintPreallocated(cJSON *item, char *buffer, const int length, const int format)
+{
+	char *printed;
+	int printed_len;
+
+	if (!item || !buffer || length <= 0) {
+		return 0;
+	}
+
+	printed = format ? cJSON_Print(item) : cJSON_PrintUnformatted(item);
+	if (!printed) {
+		return 0;
+	}
+
+	printed_len = (int)strlen(printed);
+	if (printed_len >= length) {
+		cJSON_free(printed);
+		return 0;
+	}
+
+	memcpy(buffer, printed, (size_t)printed_len + 1U);
+	cJSON_free(printed);
+	return 1;
 }
 
 

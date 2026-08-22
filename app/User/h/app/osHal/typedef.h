@@ -5,14 +5,16 @@
 extern "C" {
 #endif
 
+#include <stddef.h>
+#include <stdbool.h>
+#include <stdint.h>
+
 typedef char int8;
 typedef short int16;
 typedef int int32;
 typedef unsigned char uint8;
 typedef unsigned short uint16;
 typedef unsigned int uint32;
-typedef unsigned int size_t;
-#include <stdbool.h>
 #define BOOL bool
 #ifndef NULL
 #ifdef __cplusplus
@@ -21,29 +23,6 @@ typedef unsigned int size_t;
 #define NULL ((void *)0)
 #endif
 #endif
-
-/* 如果编译器支持 C99，就直接用标准库 */
-#if __STDC_VERSION__ >= 199901L || defined(__GNUC__) || defined(_MSC_VER)
-    #include <stdint.h>
-#else
-    /* 否则我们自己定义 */
-    typedef signed char     int8_t;
-    typedef short           int16_t;
-    typedef int             int32_t;
-    typedef unsigned char   uint8_t;
-    typedef unsigned short  uint16_t;
-    typedef unsigned int    uint32_t;
-
-    /* 如果需要 64 位整数，也可以加上 */
-    #if defined(_MSC_VER) && (_MSC_VER < 1300)
-        typedef __int64            int64_t;
-        typedef unsigned __int64   uint64_t;
-    #else
-        typedef long long          int64_t;
-        typedef unsigned long long uint64_t;
-    #endif
-
-#endif /* __STDC_VERSION__ >= 199901L */
 
 
 #ifndef RET_OK
@@ -72,13 +51,20 @@ typedef unsigned int size_t;
 #endif 
 
 
+#ifndef INT8_MIN
 #define INT8_MIN   (-128)
-#define MIN(a, b) (a > b ? b : a)
-#define MAX(a, b) (a > b ? a : b)
-
+#endif
+#ifndef MIN
+#define MIN(a, b) ((a) > (b) ? (b) : (a))
+#endif
+#ifndef MAX
+#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#endif
 
 #define ARRAY_SIZE(x) (sizeof(x)/sizeof(x[0]))
+#ifndef offsetof
 #define offsetof(type, member) ((size_t)&(((type *)0)->member))
+#endif
 #define container_of(ptr, type, member) \
     ((type *)((char *)(ptr) - offsetof(type, member)))
 

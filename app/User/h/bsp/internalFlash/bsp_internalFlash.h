@@ -2,7 +2,7 @@
 #define	__INTERNAL_FLASH_H
 
 #include "stm32f4xx.h"
-
+#include "bsp_usart.h"   /* FLASH_DEBUG 宏依赖 sram_printf 的声明 */
 
 //typedef unsigned int uint32_t;
 
@@ -24,11 +24,13 @@
 #define ADDR_FLASH_SECTOR_12     ((uint32_t)0x08100000) /* Base address of Sector 12, 16 Kbytes  */
 
 
+#ifndef FLASH_DEBUG
 #define FLASH_DEBUG_ON 1
 #define FLASH_DEBUG(format, ...) do{\
                                  if(FLASH_DEBUG_ON)\
                                     sram_printf("[%s:%d] " format, __FUNCTION__, __LINE__, ##__VA_ARGS__);\
                                  }while(0)
+#endif
 
 
 #define MAX(a, b) (a > b ? a : b)

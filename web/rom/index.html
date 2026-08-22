@@ -1,0 +1,171 @@
+<!DOCTYPE html>
+<html lang="zh">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>F407 ROM</title>
+<style>
+:root { --bg:#0f172a; --card:#1e293b; --fg:#e2e8f0; --mut:#94a3b8; --acc:#22d3ee; --ok:#34d399; --bad:#f87171; }
+*{box-sizing:border-box} body{margin:0;font:15px/1.45 system-ui,sans-serif;background:var(--bg);color:var(--fg)}
+.wrap{max-width:42rem;margin:0 auto;padding:1.25rem}
+h1{font-size:1.25rem;margin:0 0 .35rem}
+.badge{display:inline-block;background:#334155;color:var(--acc);font-size:.75rem;padding:.15rem .5rem;border-radius:999px}
+.hint{color:var(--mut);font-size:.85rem;margin:.4rem 0 1rem}
+.card{background:var(--card);border-radius:.75rem;padding:1rem;margin:0 0 .75rem}
+h2{margin:0 0 .6rem;font-size:1rem;color:var(--acc)}
+.pw-wrap{display:flex;gap:.4rem;align-items:stretch}
+.pw-wrap input{flex:1;min-width:0}
+.pw-wrap .eye{width:auto;flex:none;padding:.55rem .75rem;background:#475569;color:#fff}
+label,input,button,pre{display:block;width:100%}
+input[type=file]{margin:.35rem 0 .6rem;color:var(--mut)}
+button{border:0;border-radius:.5rem;padding:.55rem;font-weight:700;cursor:pointer;background:linear-gradient(90deg,#2563eb,#06b6d4);color:#fff}
+button.orange{background:linear-gradient(90deg,#ea580c,#ef4444)}
+.pw-wrap .eye{width:auto;flex:none;padding:.55rem .75rem;background:#475569;color:#fff;font-weight:400}
+pre{background:#0b1220;padding:.6rem;border-radius:.4rem;font-size:.8rem;overflow:auto;min-height:2.2rem;white-space:pre-wrap}
+.meta{display:flex;gap:1rem;flex-wrap:wrap;color:var(--mut);font-size:.85rem;margin-bottom:.75rem}
+.bar{height:.4rem;background:#334155;border-radius:9px;overflow:hidden;margin:.4rem 0}
+.bar>i{display:block;height:100%;width:0;background:var(--acc)}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>STM32F407</h1>
+  <span class="badge">ROM 保底页</span>
+  <p class="hint">当前走片内 fsdata（SPI 网页未加载或无效）。上传完整 web.bin 后刷新即可切到管理界面。<br>完整包：<code>./flash.sh web</code></p>
+  <div class="meta">
+    <span id="up">运行 --</span>
+    <span id="tm">时间 --</span>
+  </div>
+
+  <div class="card">
+    <h2>Wi-Fi</h2>
+    <label>SSID</label>
+    <input id="ssid" maxlength="32" placeholder="无线名称">
+    <label>密码</label>
+    <div class="pw-wrap">
+      <input id="psk" type="password" maxlength="63" placeholder="开放网络可留空">
+      <button id="pskToggle" class="eye" type="button" title="显示密码" aria-label="显示密码" onclick="return toggleRomPsk();">👁</button>
+    </div>
+    <button id="wifiBtn" type="button" style="margin-top:.6rem">保存并连接</button>
+    <pre id="wifiOut">—</pre>
+  </div>
+
+  <div class="card">
+    <h2>网页升级</h2>
+    <form id="fWeb">
+      <label>web.bin（或打包后的网页文件）</label>
+      <input type="file" id="webFile" required>
+      <button type="submit">上传到 SPI</button>
+    </form>
+    <div class="bar"><i id="webBar"></i></div>
+    <pre id="webOut">等待选择文件</pre>
+  </div>
+
+  <div class="card">
+    <h2>固件升级</h2>
+    <form id="fFw">
+      <label>upg.bin</label>
+      <input type="file" id="fwFile" accept=".bin" required>
+      <button class="orange" type="submit">升级并重启</button>
+    </form>
+    <div class="bar"><i id="fwBar"></i></div>
+    <pre id="fwOut">请上传 genUpgBin.py 生成的 upg.bin</pre>
+  </div>
+</div>
+<script>
+function xhrPost(url, body, ct, bar, onDone) {
+  var x = new XMLHttpRequest();
+  x.open('POST', url, true);
+  if (ct) x.setRequestHeader('Content-Type', ct);
+  x.upload.onprogress = function (e) {
+    if (e.lengthComputable) bar.style.width = (100 * e.loaded / e.total).toFixed(1) + '%';
+  };
+  x.onload = function () { onDone(null, x.status, x.responseText); };
+  x.onerror = function () { onDone(new Error('network')); };
+  x.send(body);
+}
+function show(el, ok, text) {
+  el.style.color = ok ? 'var(--ok)' : 'var(--bad)';
+  el.textContent = text;
+}
+fetch('/protocol/system/info').then(function (r) { return r.json(); }).then(function (j) {
+  var d = (j && j.data) ? j.data : {};
+  if (d.uptime) document.getElementById('up').textContent = '运行 ' + d.uptime;
+  if (d.systime) document.getElementById('tm').textContent = d.systime;
+}).catch(function () {});
+function wifiRefresh() {
+  fetch('/protocol/wifi/config').then(function (r) { return r.json(); }).then(function (j) {
+    var d = (j && j.data) ? j.data : {};
+    if (d.ssid != null) {
+      document.getElementById('ssid').value = d.ssid;
+    }
+    if (d.psk != null || d.password != null) {
+      document.getElementById('psk').value = d.psk || d.password || '';
+    }
+    document.getElementById('wifiOut').textContent =
+      'state=' + (d.state || '?') + (d.error ? (' ' + d.error) : '');
+  }).catch(function (e) {
+    document.getElementById('wifiOut').textContent = String(e);
+  });
+}
+wifiRefresh();
+function toggleRomPsk() {
+  var inp = document.getElementById('psk');
+  var btn = document.getElementById('pskToggle');
+  if (!inp) {
+    return false;
+  }
+  var show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  if (btn) {
+    btn.title = show ? '隐藏密码' : '显示密码';
+    btn.textContent = show ? '🙈' : '👁';
+  }
+  return false;
+}
+document.getElementById('wifiBtn').onclick = function () {
+  var ssid = document.getElementById('ssid').value.trim();
+  var psk = document.getElementById('psk').value;
+  if (!ssid) {
+    document.getElementById('wifiOut').textContent = '请填写 SSID';
+    return;
+  }
+  document.getElementById('wifiOut').textContent = '下发中…';
+  fetch('/protocol/wifi/config', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ data: { ssid: ssid, psk: psk, password: psk } })
+  }).then(function (r) { return r.text(); }).then(function (t) {
+    document.getElementById('wifiOut').textContent = t;
+    setTimeout(wifiRefresh, 1500);
+  }).catch(function (e) {
+    document.getElementById('wifiOut').textContent = String(e);
+  });
+};
+document.getElementById('fWeb').onsubmit = function (e) {
+  e.preventDefault();
+  var f = document.getElementById('webFile').files[0];
+  if (!f) return;
+  var fd = new FormData();
+  fd.append('file', f);
+  document.getElementById('webOut').textContent = '上传中… ' + f.name;
+  xhrPost('/protocol/system/upload', fd, null, document.getElementById('webBar'), function (err, st, t) {
+    if (err) return show(document.getElementById('webOut'), false, String(err));
+    show(document.getElementById('webOut'), st >= 200 && st < 300, t || ('HTTP ' + st));
+    if (st >= 200 && st < 300) setTimeout(function () { location.reload(); }, 800);
+  });
+};
+document.getElementById('fFw').onsubmit = function (e) {
+  e.preventDefault();
+  var f = document.getElementById('fwFile').files[0];
+  if (!f) return;
+  document.getElementById('fwOut').textContent = '上传中… ' + f.name;
+  xhrPost('/protocol/system/upgrade?totalSize=' + f.size, f, 'application/octet-stream',
+    document.getElementById('fwBar'), function (err, st, t) {
+      if (err) return show(document.getElementById('fwOut'), false, String(err));
+      show(document.getElementById('fwOut'), st >= 200 && st < 300, t || ('HTTP ' + st + '，设备即将重启'));
+    });
+};
+</script>
+</body>
+</html>

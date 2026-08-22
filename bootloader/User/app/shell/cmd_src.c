@@ -12,7 +12,15 @@ uint32_t dwCurrentAppAddr = APP1_ADDRESS;
 
 void setAppAddr(uint8_t part_app)
 {
-    dwCurrentAppAddr = part_app ? APP2_ADDRESS : APP1_ADDRESS;
+    uint32_t addr = part_app ? APP2_ADDRESS : APP1_ADDRESS;
+
+    if (!app_image_valid(addr)) {
+        printf("APP image invalid @0x%08lx\r\n", (unsigned long)addr);
+        printf("hint: APP2 must be linked with ORIGIN=0x08060000; "
+               "copying APP1.bin to APP2 will fail vector check.\r\n");
+        return;
+    }
+    dwCurrentAppAddr = addr;
 }
 static uint8_t byBootStandbyFlag = 1;
 
@@ -23,7 +31,7 @@ static CMD_ENTRY_T gs_cmd_t[] = {
   {"help",     cmd_help,     "cmd description"},
   {"hex_dump", sys_hex_dump, "flash data hex dump"},
   {"upgrade",  cmd_update,   "usart upgrade fw"},
-  {"goto",     cmd_goto,     "jump to APP"},
+  {"goto",     cmd_goto,     "goto 0|1  jump APP1/APP2"},
 };
 
 #define CMD_ENTRY_SIZE (sizeof(gs_cmd_t)/sizeof(gs_cmd_t[0]))
@@ -229,12 +237,18 @@ void cmd_goto(void *arg)
     char* argv[4] = {0};
     int argc = 0;
     char *args = (char *)arg;
+    uint32_t addr;
 
     argc = cmdline_strtok(args, argv, 2);
     (void)argc;
     part_app = (argv[1] != NULL) ? (uint8_t)atoi(argv[1]) : 0;
-    printf("jump to address:%08lx...\r\n",
-           (unsigned long)(part_app ? APP2_ADDRESS : APP1_ADDRESS));
+    addr = part_app ? APP2_ADDRESS : APP1_ADDRESS;
+    printf("goto APP%u @0x%08lx ...\r\n", part_app ? 2U : 1U, (unsigned long)addr);
+
+    if (!app_image_valid(addr)) {
+        printf("refuse jump: invalid image (MSP/Reset not in this bank)\r\n");
+        return;
+    }
     setAppAddr(part_app);
     setResetFlag(NULL);
 }
@@ -275,6 +289,7 @@ cmd_func parseCmd(uint8 *data/*, uint8 len*/)
 void history_redraw_line(const char *buf)
 {
     int buf_num = strlen(buf);
+    (void)buf_num;
     
     // 移动光标到正确位置
     for(int i = 0;i < cursor;i++)

@@ -539,21 +539,41 @@ static void shell_clean_screen(void * arg)
 static void shell_list_cmd(void * arg)
 {
 	struct shell_input * shellin ;
-	struct shellcommand * cmd;
-	unsigned int firstchar = 0;
-	cmd_entry_t  * node ;
-	
-	for (node = FIRST(&shellcmdroot) ; node; node = NEXT(node)){
-		cmd = container_of(node,struct shellcommand, node);
-		if (firstchar != (cmd->ID & 0xfc000000)) {
-			firstchar = cmd->ID & 0xfc000000;
-			printk("\r\n(%c)------",((firstchar>>26)|0x40));
-		}
-		shell_control_explain(&cmd->ID);
-		printk("\r\n\t%s", cmd->name);
-	}
+
+	printk("\r\n");
+	printk("  Command                Description\r\n");
+	printk("  --------------------   --------------------------------\r\n");
+	printk("  System\r\n");
+	printk("    help                 Show this list\r\n");
+	printk("    clear                Clear screen\r\n");
+	printk("    version              Shell / software version\r\n");
+	printk("    reboot               Reset MCU\r\n");
+	printk("    uptime               Uptime and RTC\r\n");
+	printk("    free                 Heap usage\r\n");
+	printk("    mem                  Task stack watermark\r\n");
+	printk("    top                  CPU runtime stats\r\n");
+	printk("    debugLevel [n]       Get/set log level\r\n");
+	printk("  Network\r\n");
+	printk("    ifconfig             Ethernet IP / link\r\n");
+    printk("    ping <ip> [count]    ICMP echo, default 4\r\n");
+	printk("    dhcp [0|1]           DHCP off/on\r\n");
+	printk("    wifi                 Show Wi-Fi ssid/state\r\n");
+	printk("    wifi scan            ESP8266 AP scan (CWLAP)\r\n");
+	printk("  Storage\r\n");
+	printk("    ls                   SPI partition table\r\n");
+	printk("    hex_dump p off len   Dump flash (5=config 4=web)\r\n");
+	printk("    spi_id               SPI Flash JEDEC ID\r\n");
+	printk("    setWeb [0|1]         0=SPI web  1=ROM web\r\n");
+	printk("    clearLog             Erase log partition\r\n");
+	printk("  Hardware\r\n");
+	printk("    dht11                Read DHT11\r\n");
+	printk("    check_sysclock       SYSCLK/HCLK/PCLK\r\n");
+	printk("    check_gpio [GPIOx]   GPIO pin dump\r\n");
+	printk("    set_gpio ...         Set GPIO pin\r\n");
+	printk("\r\n");
+
 	shellin = container_of(arg, struct shell_input, cmdline);
-	printk("\n\n%s",shellin->sign);
+	printk("%s",shellin->sign);
 }
 
 
@@ -575,6 +595,7 @@ static void shell_version(void * arg)
   * @param  arg  : 命令行内存
   * @return don't care
 */
+static void shell_debug_stream(void * arg) __attribute__((unused));
 static void shell_debug_stream(void * arg)
 {
 	static const char closemsg[] = "\r\n\tclose debug information stream\r\n\r\n";
@@ -990,7 +1011,9 @@ void shell_init(char * defaultsign ,fmt_puts_t puts)
     /* 注册一些基础指令 */
     shell_register_command("help"         , shell_list_cmd);
     shell_register_command("version_shell", shell_version);
+    shell_register_command("version"      , shell_version);
     shell_register_command("clear_"       , shell_clean_screen);
+    shell_register_command("clear"        , shell_clean_screen);
     //shell_register_command("debug_info"   , shell_debug_stream);
     shell_register_command("command-ID"   , shell_control_ID);
     shell_conteol_register();

@@ -31,9 +31,111 @@ char * pCh, * pCh1;
 
 extern struct  STRUCT_USARTx_Fram strEsp8266_Fram_Record;
 
+/* 直接按字节把数据发给模块，不做 printf 格式化。
+   注意：macESP8266_Usart 是 printf 风格，若数据里含 '%'（如 URL 的 %2F）
+   会被 vsnprintf 当成格式符读取不存在的参数，产生乱码、字节数也不对。 */
+static void esp8266_send_raw(const char *data, uint32_t len)
+{
+    uint32_t i;
+
+    for (i = 0; i < len; i++) {
+        while (USART_GetFlagStatus(macESP8266_USARTx, USART_FLAG_TXE) == RESET) {
+        }
+        USART_SendData(macESP8266_USARTx, (uint16_t)(uint8_t)data[i]);
+    }
+}
+
 static char gs_weather[16];
 static int gs_dwTemperature;
 static char gs_byUptime[32];
+static volatile uint8_t gs_wifi_reconfig_pending;
+
+/* ---- 天气获取调度：定时刷新 + 失败重试 + 统计 ---- */
+#define WEATHER_REFRESH_INTERVAL_MS  (30UL * 60UL * 1000UL)  /* 两次成功获取之间的最小间隔 */
+#define WEATHER_RESP_TIMEOUT_MS      (10UL * 1000UL)         /* SEND OK 后等待 +IPD 响应的上限 */
+#define WEATHER_RETRY_BACKOFF_MS     (30UL * 1000UL)         /* 重试退避基数：30s/60s/120s… */
+#define WEATHER_MAX_RETRY            5
+
+static volatile uint32_t gs_weather_last_ok_ms;      /* 最近一次成功解析的时间戳(ms)，0=从未成功 */
+static volatile uint32_t gs_weather_next_poll_ms;    /* 在此时间(ms)之前不发起请求 */
+static volatile uint32_t gs_weather_sent_ms;         /* 最近一次请求发出的时间(ms) */
+static volatile uint8_t  gs_weather_retry_cnt;
+static volatile uint8_t  gs_weather_awaiting;        /* 请求已发出，正在等 +IPD */
+static volatile uint8_t  gs_weather_busy;
+static volatile uint32_t gs_weather_ok_count;
+static volatile uint32_t gs_weather_fail_count;
+
+/* 跨帧 JSON 累积：Open-Meteo 响应可能被 IDLE 拆成多帧，拼齐后再解析 */
+static char     gs_json_accum[ESP_JSON_LEN];
+static uint16_t gs_json_accum_len;
+
+void ESP8266_WeatherStats(uint32_t *ok, uint32_t *fail, uint32_t *last_ok_ms)
+{
+    if (ok)         { *ok = gs_weather_ok_count; }
+    if (fail)       { *fail = gs_weather_fail_count; }
+    if (last_ok_ms) { *last_ok_ms = gs_weather_last_ok_ms; }
+}
+
+/* 前向声明：WeatherPoll 在下面定义前调用 */
+uint8_t ESP8266_linkServer_timeout(uint32_t time);
+
+void ESP8266_RequestWifiReconfig(void)
+{
+    gs_wifi_reconfig_pending = 1;
+    ESP8266_WifiApplySet(WIFI_APPLY_PENDING, NULL);
+}
+
+uint8_t ESP8266_ConsumeWifiReconfigRequest(void)
+{
+    uint8_t pending = gs_wifi_reconfig_pending;
+    if (pending) {
+        gs_wifi_reconfig_pending = 0;
+    }
+    return pending;
+}
+
+static void esp8266_mutex_ensure(void)
+{
+    if (!gs_esp8266Data_mutex) {
+        os_mutex_init(gs_esp8266Data_mutex);
+    }
+}
+
+void ESP8266_ProcessPendingWifiReconfig(void)
+{
+    if (!ESP8266_ConsumeWifiReconfigRequest()) {
+        return;
+    }
+    os_printf("ESP8266: apply wifi reconfig asynchronously\r\n");
+    ESP8266_WifiApplySet(WIFI_APPLY_CONNECTING, NULL);
+    ESP8266_StaTcpClient_Unvarnish_ConfigTest();
+}
+
+void ESP8266_WifiStatus(void)
+{
+    const char *ssid = getEsp8266Ssid();
+    const char *psk = getEsp8266Psk();
+
+    os_printf("wifi  state=%s\r\n", ESP8266_WifiApplyStateStr());
+    os_printf("      error=%s\r\n", ESP8266_WifiApplyError());
+    os_printf("      ssid =%s\r\n", (ssid && ssid[0]) ? ssid : "(empty)");
+    os_printf("      psk  =%s\r\n", (psk && psk[0]) ? psk : "(empty)");
+}
+
+void ESP8266_WifiScan(void)
+{
+    esp8266_mutex_ensure();
+    os_printf("wifi scan: power up ESP8266, AT+CWLAP...\r\n");
+    macESP8266_CH_ENABLE();
+    ESP8266_USART_RxIrqCtrl(1);
+    os_sleep_ms(2000);
+    (void)ESP8266_Cmd("AT", "OK", NULL, 1000);
+    (void)ESP8266_Cmd("AT+CWMODE=1", "OK", "no change", 2000);
+    os_mutex_lock(gs_esp8266Data_mutex, OS_WAIT_FOREVER);
+    (void)ESP8266_Cmd("AT+CWLAP", "OK", NULL, 8000);
+    os_mutex_unlock(gs_esp8266Data_mutex);
+    os_printf("wifi scan done\r\n");
+}
 
 void getWeather(char *data, uint8 len)
 {
@@ -358,302 +460,311 @@ void Get_ESP82666_Cmd( char * cmd)
 }
 
 
+/* Open-Meteo WMO 天气码 -> 文字（gs_weather 用，仅存 16 字节） */
+static const char *weather_code_text(int code)
+{
+    switch (code) {
+    case 0:  return "Clear";
+    case 1:  return "MainlyClear";
+    case 2:  return "PartlyCld";
+    case 3:  return "Overcast";
+    case 45:
+    case 48: return "Fog";
+    case 51:
+    case 53:
+    case 55:
+    case 56:
+    case 57: return "Drizzle";
+    case 61:
+    case 63:
+    case 65:
+    case 66:
+    case 67: return "Rain";
+    case 71:
+    case 73:
+    case 75:
+    case 77: return "Snow";
+    case 80:
+    case 81:
+    case 82: return "Showers";
+    case 85:
+    case 86: return "SnowShwr";
+    case 95: return "Thunder";
+    case 96:
+    case 99: return "Thun+Hail";
+    default: return "Unknown";
+    }
+}
+
 void ESP8266_cmd(char * cmd)
 {
     cJSON *root = NULL;
     cJSON *now = NULL;
-    cJSON *result = NULL;
     cJSON *temp = NULL;
-    cJSON *text = NULL;
-    cJSON *upt = NULL;
-    int temperature = 0;
+    cJSON *code = NULL;
+    cJSON *time = NULL;
     char *pJson = NULL;
+    char uptime[24] = {0};
+    const char *acc;
 
     pJson = (char *)os_malloc(ESP_JSON_LEN);
     CUSTOM_ASSERT(!pJson, return);
     memset(pJson, 0, ESP_JSON_LEN);
 
+    /* 跨帧累积：上一帧是残缺 JSON 时，把本帧尾巴续上（从第一个 '{' 起，去掉 +IPD 头） */
+    if (gs_json_accum_len > 0) {
+        acc = strchr(cmd, '{');
+        if (acc == NULL) {
+            acc = cmd;
+        }
+        while (gs_json_accum_len < sizeof(gs_json_accum) - 1U && *acc) {
+            gs_json_accum[gs_json_accum_len++] = *acc++;
+        }
+        gs_json_accum[gs_json_accum_len] = '\0';
+        cmd = gs_json_accum;
+    }
+
     if(extract_json(cmd, pJson, ESP_JSON_LEN))
     {
+        /* 有 '{' 但没有 '}'：JSON 还没收全，暂存等下一帧 */
+        acc = strchr(cmd, '{');
+        if (acc && strrchr(cmd, '}') == NULL) {
+            gs_json_accum_len = 0;
+            while (gs_json_accum_len < sizeof(gs_json_accum) - 1U && *acc) {
+                gs_json_accum[gs_json_accum_len++] = *acc++;
+            }
+            gs_json_accum[gs_json_accum_len] = '\0';
+            os_printf("wifi: json partial, buffered %u bytes, wait next frame\r\n",
+                      (unsigned)gs_json_accum_len);
+            goto end;
+        }
+        gs_json_accum_len = 0;
+        os_printf("wifi: no complete json in rx (len=%u): %.120s\r\n",
+                  (unsigned)strlen(cmd), cmd);
         goto end;
     }
+    gs_json_accum_len = 0;
 
     root = cJSON_Parse(pJson);
     CUSTOM_ASSERT(!root, goto end);
 
-    // result节点
-    result = cJSON_GetObjectItem(root, "result");
-    CUSTOM_ASSERT(!result, goto end);
-
-    // now节点
-    now = cJSON_GetObjectItem(result, "now");
+    /* Open-Meteo: {"current_weather":{"temperature":26.2,"weathercode":3,"time":"2026-08-21T14:45"}} */
+    now = cJSON_GetObjectItem(root, "current_weather");
     CUSTOM_ASSERT(!now, goto end);
 
-    // 解析温度(temp)
-    temp = cJSON_GetObjectItem(now, "temp");
-    temperature = temp ? temp->valueint : -999;
-    gs_dwTemperature = temperature;
+    // 解析温度(temperature)
+    temp = cJSON_GetObjectItem(now, "temperature");
+    if (temp && cJSON_IsNumber(temp)) {
+        gs_dwTemperature = (int)temp->valuedouble;
+    }
 
-    // 解析天气(text)
-    text = cJSON_GetObjectItem(now, "text");
-    char *weather = text ? text->valuestring : "unknown";
-    memcpy_s(gs_weather, sizeof(gs_weather), weather, strlen(weather));
+    // 解析天气(weathercode -> WMO 编码)
+    code = cJSON_GetObjectItem(now, "weathercode");
+    if (code) {
+        const char *text = weather_code_text(code->valueint);
+        memcpy_s(gs_weather, sizeof(gs_weather), text, strlen(text));
+    }
 
-    // 解析更新时间(uptime)
-    upt = cJSON_GetObjectItem(now, "uptime");
-    char *uptime = upt ? upt->valuestring : "unknown";
-    memcpy_s(gs_byUptime, sizeof(gs_byUptime), uptime, strlen(uptime));
+    // 解析时间(time)："2026-08-21T14:45" -> "20260821144500"
+    time = cJSON_GetObjectItem(now, "time");
+    if (time && time->valuestring) {
+        const char *src = time->valuestring;
+        int i, j;
+        for (i = 0, j = 0; src[i] && j < (int)sizeof(uptime) - 1; i++) {
+            if (src[i] >= '0' && src[i] <= '9') {
+                uptime[j++] = src[i];
+            }
+        }
+        while (j < 14 && j < (int)sizeof(uptime) - 1) {
+            uptime[j++] = '0';
+        }
+        uptime[j] = '\0';
+        memcpy_s(gs_byUptime, sizeof(gs_byUptime), uptime, strlen(uptime));
+    }
 
-    //printf("天气: %s\n", weather);
-    printf("temp: %d°C\n", temperature);
-    printf("uptime: %s\n", uptime);
+    printf("temp: %d°C\n", gs_dwTemperature);
+    printf("weather: %s\n", gs_weather);
+    printf("uptime: %s\n", gs_byUptime);
 
-    RTC_Set_From_Uptime(uptime);
+    if (gs_byUptime[0]) {
+        RTC_Set_From_Uptime(gs_byUptime);
+    }
+
+    /* 天气数据有效：记录成功时间，并把下次调度推到刷新周期之后，
+     * 否则 WeatherPoll 会立即再发起一次请求（连接刚关闭，AT+CIPSTART 必报 ERROR） */
+    gs_weather_last_ok_ms = os_time();
+    gs_weather_retry_cnt = 0;
+    gs_weather_awaiting = 0;
+    gs_weather_next_poll_ms = gs_weather_last_ok_ms + WEATHER_REFRESH_INTERVAL_MS;
+    gs_weather_ok_count++;
 end:
     os_free(pJson);
     cJSON_Delete(root);
     return;
 }
 
-
-typedef struct {
-    uint16_t year;
-    uint8_t month;
-    uint8_t day;
-    uint8_t hour;
-    uint8_t minute;
-    uint8_t second;
-} DateTime;
-
-void get_ntp_time(DateTime *dt) {
-    // 发送获取时间命令
-    //uart_send("AT+CIPSNTPTIME?\r\n");
-    
-    // 等待响应，解析类似：
-    // +CIPSNTPTIME:Thu Jan  1 08:00:00 1970
-    // 或者
-    // +CIPSNTPTIME:Fri Oct 27 14:30:25 2023
+//
+/* 清空 ESP8266 接收缓冲（注意 Data_RX_BUF 无 null 终止，须同时清长度） */
+static void esp8266_clear_rx_buf(void)
+{
+    strEsp8266_Fram_Record.InfBit.FramLength = 0;
+    strEsp8266_Fram_Record.InfBit.FramFinishFlag = 0;
+    strEsp8266_Fram_Record.Data_RX_BUF[0] = '\0';
 }
 
+/* 轮询模块接收缓冲，直到出现 needle；每 50ms 检查一次，loops 次后超时 */
+static int esp8266_wait_rx(const char *needle, uint32_t loops)
+{
+    uint32_t i;
+    uint16_t len;
 
-uint8_t month_to_number(char *month) {
-    const char *months[] = {"Jan","Feb","Mar","Apr","May","Jun",
-                           "Jul","Aug","Sep","Oct","Nov","Dec"};
-    for(int i = 0; i < 12; i++) {
-        if(strncmp(month, months[i], 3) == 0) {
-            return i + 1;
+    for (i = 0; i < loops; i++) {
+        os_sleep_ms(50);
+        if (strEsp8266_Fram_Record.InfBit.FramLength) {
+            /* 关 RX 中断冻结帧内容，避免与 ISR 写缓冲竞态；复制量小，窗口是微秒级 */
+            ESP8266_USART_RxIrqCtrl(0);
+            len = strEsp8266_Fram_Record.InfBit.FramLength;
+            if (len >= RX_BUF_MAX_LEN) {
+                len = RX_BUF_MAX_LEN - 1U;
+            }
+            strEsp8266_Fram_Record.Data_RX_BUF[len] = '\0';
+            ESP8266_USART_RxIrqCtrl(1);
+            if (strstr(strEsp8266_Fram_Record.Data_RX_BUF, needle)) {
+                return 1;
+            }
         }
     }
-    return 1;
+    return 0;
 }
 
-#if 0
-void parse_ntp_response(char *response, DateTime *dt) {
-    // 解析格式: +CIPSNTPTIME:Fri Oct 27 14:30:25 2023
-    char *ptr = strstr(response, "+CIPSNTPTIME:");
-    if(ptr) {
-        ptr += 13; // 跳过"+CIPSNTPTIME:"
-        
-        // 跳过星期
-        ptr = strchr(ptr, ' ');
-        if(ptr) ptr++;
-        
-        // 解析月份
-        char month[4];
-        sscanf(ptr, "%3s", month);
-        ptr += 4;
-        
-        // 解析日期、时间、年份
-        sscanf(ptr, "%hhd %hhd:%hhd:%hhd %hd", 
-               &dt->day, &dt->hour, &dt->minute, &dt->second, &dt->year);
-        
-        // 月份转换
-        dt->month = month_to_number(month);
-    }
-}
-#endif
-
-// NTP协议数据包结构 (RFC 5905)
-typedef struct {
-    uint8_t li_vn_mode;      // 跳跃指示器, 版本号, 模式
-    uint8_t stratum;         // 层级
-    uint8_t poll;            // 轮询间隔
-    uint8_t precision;       // 精度
-    uint32_t root_delay;     // 根延迟
-    uint32_t root_dispersion; // 根分散
-    uint32_t reference_id;   // 参考ID
-    uint32_t ref_ts_sec;     // 参考时间戳秒
-    uint32_t ref_ts_frac;    // 参考时间戳分数
-    uint32_t orig_ts_sec;    // 起源时间戳秒
-    uint32_t orig_ts_frac;   // 起源时间戳分数
-    uint32_t recv_ts_sec;    // 接收时间戳秒
-    uint32_t recv_ts_frac;   // 接收时间戳分数
-    uint32_t trans_ts_sec;   // 传输时间戳秒
-    uint32_t trans_ts_frac;  // 传输时间戳分数
-} ntp_packet;
-
-
-void prepare_ntp_packet(ntp_packet *packet) {
-    memset(packet, 0, sizeof(ntp_packet));
-    
-    // 设置LI=0, VN=3 (NTP版本3), Mode=3 (客户端)
-    packet->li_vn_mode = 0x1B; // 二进制: 00 011 011
-    
-    // 其他字段保持为0
-}
-
-
-int send_ntp_request(void) {
-    ntp_packet packet = {0};
-    // 发送数据
-    char send_cmd[50] = {0};
-    sprintf(send_cmd, "AT+CIPSEND=%d\r\n", sizeof(ntp_packet));
-    //macESP8266_Usart(send_cmd);
-    ESP8266_Cmd ( send_cmd, "OK", ">", 500 );
-
-    prepare_ntp_packet(&packet);
-    os_sleep_ms(500);
-
-    // 等待 ">" 提示符
-    // 然后发送NTP数据包
-    #if 1
-    // 假设 macESP8266_Usart 是一个函数，负责将数据发送给 ESP8266
-    uint8_t *data = (uint8_t *)&packet;  // 将结构体转换为字节流
-    size_t packet_size = sizeof(ntp_packet);
-
-    // 发送字节流数据到 ESP8266
-    for (size_t i = 0; i < packet_size; i++) 
-    {
-        macESP8266_Usart((char*)&data[i], 1);  // 逐字节发送
-    }
-    #endif
-    os_printf("NTP packet sent, waiting for response...\n");
-    return 1;
-}
-
-#define NTP_TIMESTAMP_DELTA 2208988800UL // 1900年到1970年的秒数
-
-uint32_t ntp_time_to_unix(uint32_t ntp_seconds) {
-    return ntp_seconds - NTP_TIMESTAMP_DELTA;
-}
-
-
-void convert_unix_to_datetime(uint32_t unix_seconds, DateTime *dt) {
-    // 简单的Unix时间戳转换 (简化版)
-    uint32_t days = unix_seconds / 86400;
-    uint32_t seconds_in_day = unix_seconds % 86400;
-    
-    dt->year = 1970 + (days / 365); // 简化计算
-    dt->month = 1 + ((days % 365) / 30);
-    dt->day = 1 + (days % 30);
-    dt->hour = seconds_in_day / 3600;
-    dt->minute = (seconds_in_day % 3600) / 60;
-    dt->second = seconds_in_day % 60;
-
-    //printf();
-}
-
-
-int parse_ntp_response(char *response, DateTime *dt) {
-    ntp_packet *packet = (ntp_packet*)response;
-
-    // 检查数据包有效性
-    if((packet->li_vn_mode & 0x07) != 4) { // 模式应为4 (服务器)
-        return 0;
-    }
-
-    if(packet->stratum == 0) { // stratum=0表示不可用
-        return 0;
-    }
-    
-    // 获取传输时间戳 (网络字节序需要转换)
-    uint32_t ntp_seconds = ntohl(packet->trans_ts_sec);
-    uint32_t unix_seconds = ntp_time_to_unix(ntp_seconds);
-    
-    // 转换为日期时间
-    convert_unix_to_datetime(unix_seconds, dt);
-    
-    return 1;
-}
-
-void ESP8266_ConnectToHTTPS(const char *host) {
-    char cmd[100] = {0};
-    snprintf(cmd, sizeof(cmd), "AT+CIPSTART=\"SSL\",\"%s\",443\r\n", host);  // 建立 HTTPS 连接
-    //macESP8266_Usart(cmd);
-    ESP8266_Cmd (cmd, "OK", "ALREAY CONNECT", 4000 );
-}
-
-void ESP8266_SendHTTPSRequest(char *request) {
-    char cmd[32] = {0};
-    snprintf(cmd, sizeof(cmd), "AT+CIPSEND=%d\r\n", strlen(request));  // 设置发送数据长度
-    macESP8266_Usart(cmd);
-    os_sleep_ms(500);
-
-    macESP8266_Usart(request);  // 发送 HTTPS 请求
-}
-
-void ESP8266_SendNtpRequest(void) 
+/* 重试退避：30s/60s/120s/240s…，封顶 240s */
+static uint32_t weather_backoff(uint8_t retry_cnt)
 {
-    char http_request[256] = {0};  // 确保有足够的空间
-    char byCmd[32] = {0};
-    uint32_t dwLen = 0;
-
-    /* GET /weather/v1/?district_id=330108&data_type=now&ak=q5WTx3ZpRur6HQ6tphYScfCGu0GtK1Mm HTTP/1.1 */
-    snprintf(http_request, sizeof(http_request),
-             "GET /api/timezone/Etc/UTC HTTP/1.1\r\n"
-             "Host: %s\r\n"
-             "User-Agent: STM32F407\r\n"
-             "Connection: close\r\n"
-             "\r\n",
-             SNTP_SERVER);
-    //ESP8266_SendHTTPSRequest(http_request);
-
-    dwLen = strlen(http_request);
-    // 调试：打印生成的请求
-    os_printf("HTTP Request:%s\n", http_request);
-
-    os_printf("Request length: %d\n", dwLen);
-    // 发送 AT 命令启动数据发送
-    snprintf(byCmd, sizeof(byCmd), "AT+CIPSEND=%d,%d\r\n",Multiple_ID_1, dwLen);
-    macESP8266_Usart(byCmd);  // 发送数据长度
-    os_sleep_ms(500);
-    macESP8266_Usart(http_request);  // 发送拼接后的请求
-
-    return;
+    uint32_t b = WEATHER_RETRY_BACKOFF_MS << (retry_cnt - 1U);
+    if (retry_cnt > 3U) {
+        b = 4U * WEATHER_RETRY_BACKOFF_MS;
+    }
+    return b;
 }
 
-// 
-void ESP8266_RequestWeather(void) {
-    // connect to wttr.in request weather info
-    /* https://wttr.in/London?format=%C+%t+%h+%w 
-     * %C --  weather
-     * %t --  temperature
-     * %h --  Humidity
-     * %w --  wind speed
-     */
+/* 天气获取调度：WiFi OK 后首次立即拉取，之后按间隔刷新；失败按退避重试。
+ * 由 esp8266 recv task 周期调用（同一任务，与命令应答互斥）。 */
+void ESP8266_WeatherPoll(void)
+{
+    uint32_t now = os_time();
+
+    if (gs_weather_busy) {
+        return;  /* 上一次请求还在收尾，下一轮再试 */
+    }
+
+    /* 请求已发出，正在等 +IPD：10s 内没有解析成功就算失败，进入退避 */
+    if (gs_weather_awaiting) {
+        if ((now - gs_weather_sent_ms) < WEATHER_RESP_TIMEOUT_MS) {
+            return;  /* 还在窗口内，继续等 */
+        }
+        gs_weather_awaiting = 0;
+        gs_weather_retry_cnt++;
+        gs_weather_fail_count++;
+        os_printf("wifi: weather response timeout\r\n");
+        gs_weather_next_poll_ms = now + weather_backoff(gs_weather_retry_cnt);
+        return;
+    }
+
+    /* 仅在 WiFi 已连上（状态机 OK）后调度 */
+    if (ESP8266_WifiApplyState() != WIFI_APPLY_OK) {
+        return;
+    }
+
+    if (now < gs_weather_next_poll_ms) {
+        return;  /* 还没到调度时间（刷新间隔或退避中） */
+    }
+
+    if (gs_weather_retry_cnt >= WEATHER_MAX_RETRY) {
+        os_printf("wifi: weather retries exhausted, wait next refresh\r\n");
+        gs_weather_retry_cnt = 0;
+        gs_weather_next_poll_ms = now + WEATHER_REFRESH_INTERVAL_MS;
+        return;
+    }
+
+    gs_weather_busy = 1;
+
+    /* 确保到天气服务器的 TCP 还在（已连则返回 ALREAY CONNECT 也算成功） */
+    if (!ESP8266_linkServer_timeout(2)) {
+        os_printf("wifi: weather reconnect server failed\r\n");
+        gs_weather_retry_cnt++;
+        gs_weather_fail_count++;
+        gs_weather_next_poll_ms = now + weather_backoff(gs_weather_retry_cnt);
+        gs_weather_busy = 0;
+        return;
+    }
+    os_sleep_ms(300);
+
+    if (ESP8266_RequestWeather() == 0) {
+        /* 发送失败：立即进入退避 */
+        gs_weather_retry_cnt++;
+        gs_weather_fail_count++;
+        gs_weather_next_poll_ms = now + weather_backoff(gs_weather_retry_cnt);
+    } else {
+        /* 已发出：登记等待窗口，解析成功会在 ESP8266_cmd 里清 awaiting */
+        gs_weather_awaiting = 1;
+        gs_weather_sent_ms = os_time();
+        gs_weather_next_poll_ms = now;
+    }
+    gs_weather_busy = 0;
+}
+
+int ESP8266_RequestWeather(void) {
     char http_request[256] = {0};  // 确保有足够的空间
     char byCmd[32] = {0};
     uint32_t dwLen = 0;
+    int got_ok = 0;
+    int got_prompt = 0;
 
-    /* GET /weather/v1/?district_id=330108&data_type=now&ak=q5WTx3ZpRur6HQ6tphYScfCGu0GtK1Mm HTTP/1.1 */
+    /* Open-Meteo 纯 HTTP，timezone=Asia/Shanghai 让返回时间为本地时间 */
     snprintf(http_request, sizeof(http_request),
-             "GET /weather/v1/?district_id=%d&data_type=%s&ak=%s HTTP/1.1\r\n"
+             "GET /v1/forecast?latitude=%s&longitude=%s&current_weather=true&timezone=Asia%%2FShanghai HTTP/1.1\r\n"
              "Host: %s\r\n"
              "User-Agent: STM32F407\r\n"
              "Connection: close\r\n"
              "\r\n",
-             DISTRICT_ID, "now", BAIDU_WEATHER_APIKEY, BAIDU_WEATHER_SERVER);
+             WEATHER_LAT, WEATHER_LON, WEATHER_SERVER);
 
     dwLen = strlen(http_request);
     // 调试：打印生成的请求
     os_printf("HTTP Request:%s\n", http_request);
 
     os_printf("Request length: %d\n", dwLen);
-    // 发送 AT 命令启动数据发送
-    snprintf(byCmd, sizeof(byCmd), "AT+CIPSEND=%d\r\n", dwLen);
+
+    /* 发送 AT 命令启动数据发送；发前清掉旧响应（CIPSTART 的 CONNECT/OK 残留） */
+    esp8266_clear_rx_buf();
+    snprintf(byCmd, sizeof(byCmd), "AT+CIPSEND=%u\r\n", (unsigned)dwLen);
     macESP8266_Usart(byCmd);  // 发送数据长度
-    os_sleep_ms(500);
-    macESP8266_Usart(http_request);  // 发送拼接后的请求
+
+    /* 等模块就绪：标准 AT 回 '>' 提示符，老固件可能只回 OK 就直接收数据 */
+    got_ok = esp8266_wait_rx("OK", 40);     // 2s
+    got_prompt = esp8266_wait_rx(">", 40);  // 2s（OK+'>' 同帧时立刻命中）
+    if (!got_ok && !got_prompt) {
+        os_printf("wifi: CIPSEND no response: %.80s\r\n",
+                  strEsp8266_Fram_Record.Data_RX_BUF);
+        return 0;
+    }
+    if (!got_prompt) {
+        os_printf("wifi: CIPSEND no '>' prompt, sending anyway: %.80s\r\n",
+                  strEsp8266_Fram_Record.Data_RX_BUF);
+    }
+    os_sleep_ms(100);
+
+    /* 清掉提示符，按字节发请求数据（不能走 printf，URL 的 %2F 会被当格式符） */
+    esp8266_clear_rx_buf();
+    esp8266_send_raw(http_request, dwLen);  // 发送拼接后的请求
+
+    if (!esp8266_wait_rx("SEND OK", 100)) {  // 5s
+        os_printf("wifi: CIPSEND no SEND OK: %.120s\r\n",
+                  strEsp8266_Fram_Record.Data_RX_BUF);
+        return 0;
+    }
+    os_printf("wifi: request sent, waiting reply...\r\n");
+    return 1;
 }
 
 uint8 ESP8266_TimeoutHandler(FuncPtr func, uint32 time)
@@ -667,7 +778,8 @@ uint8 ESP8266_TimeoutHandler(FuncPtr func, uint32 time)
         {
             return 1;
         }
-        Delay_ms(200);
+        /* CWJAP 失败后模组会 busy 十几秒，200ms 立刻重发会一直 busy p... */
+        os_sleep_ms(5000);
         cnt++;
         if(cnt == time)
         {
@@ -688,7 +800,7 @@ uint8_t ESP8266_JoinAP_timeout(uint32_t time) {
 
 // 连接Wi-Fi的原始函数
 static bool __ESP8266_link_server(void) {
-    return ESP8266_Link_Server(enumTCP, BAIDU_WEATHER_SERVER, WEATHER_SERVER_PORT, Single_ID_0);  // 假设这个函数返回bool类型
+    return ESP8266_Link_Server(enumTCP, WEATHER_SERVER, WEATHER_SERVER_PORT, Single_ID_0);  // 假设这个函数返回bool类型
 }
 
 // 示例：你可以传入 ESP8266_JoinAP 函数，控制连接 Wi-Fi 的超时
@@ -737,24 +849,49 @@ int checkEsp8266WorkMode()
   * @param  ��
   * @retval ��
   */
+static bool __ESP8266_DHCP_CUR(void)
+{
+    return ESP8266_DHCP_CUR();
+}
+
+static bool __ESP8266_Net_Mode_STA(void)
+{
+    return ESP8266_Net_Mode_Choose(STA);
+}
+
+static bool __ESP8266_Disable_MultipleId(void)
+{
+    return ESP8266_Enable_MultipleId(DISABLE);
+}
+
 void ESP8266_StaTcpClient_Unvarnish_ConfigTest(void)
 {
     uint8 byRet = 0;
 
+    esp8266_mutex_ensure();
+
     os_printf( "enable ESP8266 ......\r\n" );
     macESP8266_CH_ENABLE();
-
-    if(!gs_esp8266Data_mutex)
-    {
-       os_mutex_init(gs_esp8266Data_mutex);
+    ESP8266_USART_RxIrqCtrl(1);
+    os_printf("ESP8266: wait ready after CH_PD\r\n");
+    os_sleep_ms(2000);
+    if (!ESP8266_Cmd("AT", "OK", NULL, 1000)) {
+        os_sleep_ms(1000);
+        (void)ESP8266_Cmd("AT", "OK", NULL, 1000);
     }
 
-    //macESP8266_Usart("AT+GMR");
-    //while( ! ESP8266_AT_Test() );
+    os_printf("ESP8266: leave AP\r\n");
     ESP8266_leave_AP();
+    os_sleep_ms(1500);
     if(!checkEsp8266DhcpStatus())
     {
-        while( ! ESP8266_DHCP_CUR () );
+        byRet = ESP8266_TimeoutHandler(__ESP8266_DHCP_CUR, 10);
+        if(!byRet)
+        {
+            os_debug("ESP8266_DHCP_CUR timeout\r\n");
+            ESP8266_WifiApplySet(WIFI_APPLY_FAIL, "DHCP timeout");
+            return;
+        }
     }
 
     byRet = checkEsp8266WorkMode();
@@ -762,53 +899,55 @@ void ESP8266_StaTcpClient_Unvarnish_ConfigTest(void)
     if(1 != byRet)
     {
         printf( "\r\nset workScene: STA ......\r\n" );
-        while( ! ESP8266_Net_Mode_Choose ( STA ) );
+        byRet = ESP8266_TimeoutHandler(__ESP8266_Net_Mode_STA, 10);
+        if(!byRet)
+        {
+            os_debug("ESP8266_Net_Mode_Choose timeout\r\n");
+            ESP8266_WifiApplySet(WIFI_APPLY_FAIL, "STA mode timeout");
+            return;
+        }
     }
 
     os_printf("contect WiFi:%s......\r\n", getEsp8266Ssid());
-    //while( ! ESP8266_JoinAP ( macUser_ESP8266_ApSsid, macUser_ESP8266_ApPwd ) );
-    //while( ! ESP8266_JoinAP ( getEsp8266Ssid(), getEsp8266Psk() ) );
+    #if 0
+    /* 先扫描：+CWJAP:3 = 找不到 AP。busy 时扫描也能把射频拉起来 */
+    os_printf("ESP8266: AT+CWLAP (look for ssid)\r\n");
+    (void)ESP8266_Cmd("AT+CWLAP", "OK", NULL, 8000);
+    if (getEsp8266Ssid()[0] &&
+        strstr(strEsp8266_Fram_Record.Data_RX_BUF, getEsp8266Ssid()) == NULL) {
+        os_debug("ESP8266: ssid not in CWLAP, radio cannot see AP\r\n");
+    }
+    #endif
     byRet = ESP8266_JoinAP_timeout(3);
     if(!byRet)
     {
         os_debug("ESP8266_JoinAP_timeout !\r\n");
+        ESP8266_WifiApplySet(WIFI_APPLY_FAIL, "join AP timeout");
         return;
     }
-    //printf( "\r\nforbidden MultipleId......\r\n" );
-    while( ! ESP8266_Enable_MultipleId ( DISABLE ) );
+    ESP8266_WifiApplySet(WIFI_APPLY_OK, NULL);
 
-    os_printf("connect Server:%s ......\r\n", BAIDU_WEATHER_SERVER);
-    //while( !	ESP8266_Link_Server ( enumTCP, macUser_ESP8266_TcpServer_IP, macUser_ESP8266_TcpServer_Port, Single_ID_0 ) );
+    byRet = ESP8266_TimeoutHandler(__ESP8266_Disable_MultipleId, 10);
+    if(!byRet)
+    {
+        os_debug("ESP8266_Enable_MultipleId timeout\r\n");
+        return;
+    }
 
-    //while( !	ESP8266_Link_Server ( enumTCP, BAIDU_WEATHER_SERVER, WEATHER_SERVER_PORT, Single_ID_0 ) );
+    os_printf("connect Server:%s ......\r\n", WEATHER_SERVER);
     byRet = ESP8266_linkServer_timeout(3);
     if(!byRet)
     {
         os_debug("ESP8266_linkServer_timeout !\r\n");
         return;
     }
-    //while( !	ESP8266_Link_Server ( enumTCP, SNTP_SERVER, SNTP_SERVER_PORT, Multiple_ID_1 ) );
-    os_sleep_ms(500);
-
-	  // /* send cmd to esp8266 */
-    // ESP8266_Cmd ("AT+CIPSNTPCFG=1,\"pool.ntp.org\",8\r\n", "OK", ">", 500);
-
-    // // 查询时间
-    // ESP8266_Cmd ("AT+CIPSNTPTIME?\r\n", "OK", ">", 500);
-	  //macESP8266_Usart ("AT+CIPSNTPTIME?\r\n");
-    //printf( "\r\nEnter pass-through mode ......\r\n" );
-
-    ESP8266_RequestWeather();
-    // os_sleep_ms(500);
-    // ESP8266_SendNtpRequest();
-
-    #if 0
-    /* long connect mode such as mqtt */
-    while( ! ESP8266_UnvarnishSend () );
-
-    printf( "\r\nconfig ESP8266 success!\r\n" );
-    printf ( "\r\npass-through......\r\n" );
-    #endif
+    /* 天气首次拉取与定时刷新统一由 ESP8266_WeatherPoll 调度，
+     * 避免在这里阻塞连接流程；失败会自动退避重试。 */
+    gs_weather_last_ok_ms = 0;
+    gs_weather_next_poll_ms = 0;
+    gs_weather_sent_ms = 0;
+    gs_weather_awaiting = 0;
+    gs_weather_retry_cnt = 0;
     return;
 }
 
@@ -820,7 +959,6 @@ void ESP8266_StaTcpClient_Unvarnish_ConfigTest(void)
   */
 void ESP8266_CheckRecvDataTest(void)
 {
-  uint8_t ucStatus;
   uint16_t i;
   
   /* ������յ��˴��ڵ������ֵ����� */
@@ -838,14 +976,20 @@ void ESP8266_CheckRecvDataTest(void)
 
   /* ������յ���ESP8266������ */
   if(strEsp8266_Fram_Record.InfBit.FramFinishFlag)
-  {                                                      
-    for(i = 0;i < strEsp8266_Fram_Record .InfBit .FramLength; i++)               
+  {
+    uint16_t rxlen = strEsp8266_Fram_Record.InfBit.FramLength;
+    for(i = 0;i < rxlen; i++)
     {
        /* esp8266 data send to usart1 */
        USART_SendData( DEBUG_USART ,strEsp8266_Fram_Record .Data_RX_BUF[i]);    //ת����ESP8266
        while(USART_GetFlagStatus(DEBUG_USART,USART_FLAG_TC)==RESET){}
     }
-    if(1)
+    if (rxlen >= RX_BUF_MAX_LEN) {
+        rxlen = RX_BUF_MAX_LEN - 1U;
+    }
+    strEsp8266_Fram_Record.Data_RX_BUF[rxlen] = '\0';
+    esp8266_mutex_ensure();
+    if(gs_esp8266Data_mutex)
     {
         os_mutex_lock(gs_esp8266Data_mutex, OS_WAIT_FOREVER);
         strEsp8266_Fram_Record .InfBit .FramLength = 0;                             //�������ݳ�������

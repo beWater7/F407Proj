@@ -52,7 +52,9 @@ static const char *const g_psHTTPHeaderStrings[] = {
 #define DEFAULT_404_HTML_PERSISTENT 14 /* default 404 body, but including Connection: keep-alive */
 #endif
 
+#ifndef HTTP_CONTENT_TYPE
 #define HTTP_CONTENT_TYPE(contenttype) "Content-Type: "contenttype"\r\n\r\n"
+#endif
 #define HTTP_CONTENT_TYPE_ENCODING(contenttype, encoding) "Content-Type: "contenttype"\r\nContent-Encoding: "encoding"\r\n\r\n"
 #define HTTP_CACHE_CONTENT_TYPE_ENCODING(contenttype, encoding) "Content-Type: "contenttype"\r\nCache-Control: max-age=86400, private\r\nContent-Encoding: "encoding"\r\n\r\n"
 

@@ -4,13 +4,13 @@
   * @author  fire
   * @version V1.0
   * @date    2015-xx-xx
-  * @brief   内部FLASH读写测试范例
+  * @brief   ???FLASH??锟斤拷???????
   ******************************************************************************
   * @attention
   *
-  * 实验平台:野火  STM32 F407 开发板  
-  * 论坛    :http://www.firebbs.cn
-  * 淘宝    :https://fire-stm32.taobao.com
+  * ?????:???  STM32 F407 ??????  
+  * ???    :http://www.firebbs.cn
+  * ???    :https://fire-stm32.taobao.com
   *
   ******************************************************************************
   */
@@ -22,15 +22,15 @@
 
 
 
-/*准备写入的测试数据*/
+/*???锟斤拷??????????*/
 #define DATA_32                 ((uint32_t)0x00000000)
 #define OS_1KB  1024
 
 /* Exported types ------------------------------------------------------------*/
 /* Exported constants --------------------------------------------------------*/
-/* 要擦除内部FLASH的起始地址 */
+/* ????????FLASH???????? */
 #define FLASH_USER_START_ADDR   ADDR_FLASH_SECTOR_8   
-/* 要擦除内部FLASH的结束地址 */
+/* ????????FLASH???????? */
 #define FLASH_USER_END_ADDR     ADDR_FLASH_SECTOR_12  
 
 uint8_t g_bySectorMap = 0;
@@ -43,10 +43,10 @@ uint8_t g_bySectorMap = 0;
 #define SECTOR_12_ERASED (1 << 5)
 
 
-/* FLASH读写测试结果 */
-#define  TEST_ERROR    -1   /* 错误（擦除、写入错误） */
-#define  TEST_SUCCESS  0    /* 成功 */
-#define  TEST_FAILED   1    /* 失败 */
+/* FLASH??锟斤拷?????? */
+#define  TEST_ERROR    -1   /* ?????????锟斤拷????? */
+#define  TEST_SUCCESS  0    /* ??? */
+#define  TEST_FAILED   1    /* ??? */
 
 
 #define BufferSize 6
@@ -56,10 +56,10 @@ uint16_t usFlashReadBuf[BufferSize] = {0};
 
 
 typedef struct{
-    uint8_t bySector;       //扇区标号
-    uint32_t dwSectorAddr;  //扇区地址
+    uint8_t bySector;       //???????
+    uint32_t dwSectorAddr;  //???????
     uint8_t byHeaderSize;
-    uint32_t dwUsedSize; //已使用区域大小 
+    uint32_t dwUsedSize; //??????????锟斤拷 
 }INTERNAL_FLASH_INFO;
 
 
@@ -71,13 +71,13 @@ INTERNAL_FLASH_INFO g_stInterFlashInfo[2] = {
 
 
 /**
-  * @brief  InternalFlash_Test,对内部FLASH进行读写测试
+  * @brief  InternalFlash_Test,?????FLASH???锟斤拷?锟斤拷????
   * @param  None
   * @retval None
   */
 int InternalFlash_Test(void)
 {
-	/*要擦除的起始扇区(包含)及结束扇区(不包含)，如8-12，表示擦除8、9、10、11扇区*/
+	/*??????????????(????)??????????(??????)????8-12?????????8??9??10??11????*/
 	uint32_t uwStartSector = 0;
 	uint32_t uwEndSector = 0;
 	
@@ -87,12 +87,12 @@ int InternalFlash_Test(void)
 	__IO uint32_t uwData32 = 0;
 	__IO uint32_t uwMemoryProgramStatus = 0;
 	
-  /* FLASH 解锁 ********************************/
-  /* 使能访问FLASH控制寄存器 */
+  /* FLASH ???? ********************************/
+  /* ??????FLASH???????? */
   FLASH_Unlock();
     
-  /* 擦除用户区域 (用户区域指程序本身没有使用的空间，可以自定义)**/
-  /* 清除各种FLASH的标志位 */  
+  /* ??????????? (????????????????????????????????)**/
+  /* ???????FLASH????锟斤拷 */  
   FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
                   FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
 
@@ -100,17 +100,17 @@ int InternalFlash_Test(void)
 	uwStartSector = GetSector(FLASH_USER_START_ADDR);
 	uwEndSector = GetSector(FLASH_USER_END_ADDR);
 
-  /* 开始擦除操作 */
+  /* ??????????? */
   uwSectorCounter = uwStartSector;
   while (uwSectorCounter <= uwEndSector) 
   {
-    /* VoltageRange_3 以“字”的大小进行操作 */ 
+    /* VoltageRange_3 ?????????锟斤拷???锟斤拷??? */ 
     if (FLASH_EraseSector(uwSectorCounter, VoltageRange_3) != FLASH_COMPLETE)
     { 
-      /*擦除出错，返回，实际应用中可加入处理 */
+      /*??????????????????????锟斤拷?????? */
 			return -1;
     }
-    /* 计数器指向下一个扇区 */
+    /* ?????????????????? */
     if (uwSectorCounter == FLASH_Sector_11)
     {
       uwSectorCounter += 40;
@@ -121,7 +121,7 @@ int InternalFlash_Test(void)
     }
   }
 
-  /* 以“字”的大小为单位写入数据 ********************************/
+  /* ?????????锟斤拷???锟剿э拷?????? ********************************/
   uwAddress = FLASH_USER_START_ADDR;
 
   while (uwAddress < FLASH_USER_END_ADDR)
@@ -132,19 +132,19 @@ int InternalFlash_Test(void)
     }
     else
     { 
-      /*写入出错，返回，实际应用中可加入处理 */
+      /*锟斤拷???????????????????锟斤拷?????? */
 			return -1;
     }
   }
 	
 
-  /* 给FLASH上锁，防止内容被篡改*/
+  /* ??FLASH?????????????????*/
   FLASH_Lock(); 
 
 
-  /* 从FLASH中读取出数据进行校验***************************************/
-  /*  MemoryProgramStatus = 0: 写入的数据正确
-      MemoryProgramStatus != 0: 写入的数据错误，其值为错误的个数 */
+  /* ??FLASH?锟斤拷???????????锟斤拷??***************************************/
+  /*  MemoryProgramStatus = 0: 锟斤拷??????????
+      MemoryProgramStatus != 0: 锟斤拷?????????????????????? */
   uwAddress = FLASH_USER_START_ADDR;
   uwMemoryProgramStatus = 0;
   
@@ -159,12 +159,12 @@ int InternalFlash_Test(void)
 
     uwAddress = uwAddress + 4;
   }  
-  /* 数据校验不正确 */
+  /* ????锟斤拷?锟斤拷??? */
   if(uwMemoryProgramStatus)
   {    
 		return -1;
   }
-  else /*数据校验正确*/
+  else /*????锟斤拷?????*/
   { 
 		return 0;   
   }
@@ -173,20 +173,20 @@ int InternalFlash_Test(void)
 
 
 /*******************************************************************************************************
-** 函数: FlashReadWriteTest, 内部Flash读写测试函数
+** ????: FlashReadWriteTest, ???Flash??锟斤拷???????
 **------------------------------------------------------------------------------------------------------
-** 参数: void
-** 返回: TEST_ERROR：错误（擦除、写入错误）  TEST_SUCCESS：成功   TEST_FAILED：失败
-** 说明: 无
+** ????: void
+** ????: TEST_ERROR???????????锟斤拷?????  TEST_SUCCESS?????   TEST_FAILED?????
+** ???: ??
 ********************************************************************************************************/
 int FlashReadWriteTest(void)
 {
     uint32_t ucStartAddr;
     
-    /* 解锁 */
+    /* ???? */
     FLASH_Unlock(); 
     
-    /* 擦除操作 */
+    /* ???????? */
     ucStartAddr = 0x080C1000;
 //    if (FLASH_COMPLETE != FLASH_EraseSector(FLASH_Sector_10, VoltageRange_3))
 //    {
@@ -196,7 +196,7 @@ int FlashReadWriteTest(void)
 //    else
 //    {
 //        ucStartAddr = ADDR_FLASH_PAGE_255;
-//        printf("擦除成功，此时FLASH中值为：\n");
+//        printf("????????????FLASH??????\n");
 //        for (int i = 0; i < BufferSize; i++)
 //        {
 //            usFlashReadBuf[i] = *(uint32_t*)ucStartAddr;
@@ -204,9 +204,9 @@ int FlashReadWriteTest(void)
 //            ucStartAddr += 2;
 //        }
 //    }
-    /* 写入操作 */
+    /* 锟斤拷????? */
     //ucStartAddr = 0x080E1000;
-    printf("\n往FLASH中写入的数据为：\n");
+    printf("\n??FLASH??锟斤拷??????????\n");
     for (int i = 0; i < BufferSize; i++)
     {
         if (FLASH_COMPLETE != FLASH_ProgramHalfWord(ucStartAddr, usFlashWriteBuf[i]))
@@ -218,10 +218,10 @@ int FlashReadWriteTest(void)
         ucStartAddr += 2;
     }
     
-    /* 上锁 */
+    /* ???? */
     FLASH_Lock();
     ucStartAddr = 0x080C1000;
-    printf("\n从FLASH中读出的数据为：\n");
+    printf("\n??FLASH?锟斤拷????????????\n");
     for (int i = 0; i < BufferSize; i++)
     {
         usFlashReadBuf[i] = *(__IO uint16_t*)ucStartAddr;
@@ -230,7 +230,7 @@ int FlashReadWriteTest(void)
     }
 
     
-    /* 读出的数据与写入的数据做比较 */
+    /* ????????????锟斤拷???????????? */
     for (int i = 0; i < BufferSize; i++)
     {
         if (usFlashReadBuf[i] != usFlashWriteBuf[i])
@@ -245,12 +245,12 @@ int FlashReadWriteTest(void)
 
 
 /**
-  * @brief  根据输入的地址给出它所在的sector
-  *					例如：
+  * @brief  ??????????????????????sector
+  *					???锟斤拷
 						uwStartSector = GetSector(FLASH_USER_START_ADDR);
 						uwEndSector = GetSector(FLASH_USER_END_ADDR);	
-  * @param  Address：地址
-  * @retval 地址所在的sector
+  * @param  Address?????
+  * @retval ????????sector
   */
 uint32_t GetSector(uint32_t Address)
 {
@@ -352,11 +352,14 @@ uint32_t GetSectorFlag(uint32_t dwSector)
 void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 {
     uint32_t i = 0;
+    (void)i;
     uint32_t word = 0;
-    uint8_t *orig_buf = buf;    // 保存原 buf 起始
+    uint8_t *orig_buf = buf;    // ????? buf ???
+    (void)orig_buf;
     uint32_t orig_size = size;
+    (void)orig_size;
 
-    // 如果 flash end 是闭区间 [start, end]，这里要用 >=
+    // ??? flash end ??????? [start, end]????????? >=
     CUSTOM_ASSERT(NULL == buf, return);
     CUSTOM_ASSERT(size <= 0, return);
 
@@ -368,7 +371,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 #if INTERNAL_FLASH_DEBUG
     printf("internal_flash_read addr:%08x size:%d\n", addr, size);
 #endif
-    // 按 word 读
+    // ?? word ??
     while (size >= 4)
     {
         word = *(__IO uint32_t *)addr;
@@ -383,7 +386,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
         size -= 4;
     }
 
-    // 剩下不足 4 字节
+    // ?????? 4 ???
     while (size--)
     {
         *buf++ = *(__IO uint8_t *)addr++;
@@ -391,7 +394,7 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 
 
 #if INTERNAL_FLASH_DEBUG       
-    // 用保存的 orig_buf 和 orig_size
+    // ?????? orig_buf ?? orig_size
     for (i = 0; i < orig_size; i++)
     {
         printf("%02X ", orig_buf[i]);
@@ -413,44 +416,60 @@ void internal_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
 void internal_flash_write(uint32_t addr, uint8_t *buf, uint32_t size)
 {
     uint32_t end_addr = addr + size;
-    uint32_t i = 0;
-    uint8_t byFlag = 0;
-    uint32_t first_word_addr = addr;
-    uint32_t dwDataLen = size;
-
-    uint8_t percent = 0;
-    uint32_t aligned_addr = 0;  // 4字节对齐
+    uint32_t aligned_addr = 0;
     uint32_t word = 0;
     uint8_t offset = 0;
 
-    /* 写入地址和长度校验 */
+    /* 锟斤拷?????????锟斤拷?? */
     CUSTOM_ASSERT(end_addr > ADDR_FLASH_SECTOR_12, return);
     CUSTOM_ASSERT(size < 1, return);
 
 #if INTERNAL_FLASH_DEBUG
-    os_printf(" internal_flash_table[i].size_used:%d \n", internal_flash_table[i].size_used);
+    os_printf(" internal_flash_write addr:0x%08x size:%d\n", addr, size);
 #endif
     FLASH_Unlock();
 
-    /* 清除各种FLASH的标志位 */  
-    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR | 
-                 FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR); 
+    /* ???????FLASH????锟斤拷 */
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR |
+                 FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
 
-#if INTERNAL_FLASH_DEBUG
-    os_printf(" internal_flash_write addr:0x%08x size:%d\n", addr, size);
-#endif
+    /*
+     * ??锟斤拷???????????? 4 ?????????YMODEM 1K ???????????
+     * ?????? Flash ? 0xFF??????? ProgramWord??????????? RMW??
+     */
+    if (((addr | size) & 3u) == 0u)
+    {
+        while (size >= 4u)
+        {
+            /* buf 锟斤拷锟斤拷锟斤拷锟斤拷 YMODEM 锟斤拷头锟斤拷偏锟斤拷+3锟斤拷锟斤拷锟街斤拷拼锟街憋拷锟斤拷嵌锟斤拷锟斤拷锟斤拷 */
+            word = (uint32_t)buf[0]
+                 | ((uint32_t)buf[1] << 8)
+                 | ((uint32_t)buf[2] << 16)
+                 | ((uint32_t)buf[3] << 24);
+            if (FLASH_ProgramWord(addr, word) != FLASH_COMPLETE)
+            {
+                os_debug("ProgramWord fail!\n");
+                FLASH_Lock();
+                return;
+            }
+            addr += 4u;
+            buf  += 4u;
+            size -= 4u;
+        }
+        FLASH_Lock();
+        return;
+    }
 
-    //printf("[");
-    /* 按字节写入数据到内部flash，其实可以按16位或32位写入，但是代码会更复杂写，需要考虑未对齐的情况 */
+    /* ??锟斤拷?????????????锟斤拷??/??? */
     while (size > 0)
     {
-        aligned_addr = addr & ~0x3;  // 4字节对齐
-        word = *(__IO uint32_t*)aligned_addr;
+        aligned_addr = addr & ~0x3u;
+        word = *(__IO uint32_t *)aligned_addr;
 
-        offset = addr & 0x3; // 当前地址在Word里的偏移
-        while (offset < 4 && size > 0)
+        offset = (uint8_t)(addr & 0x3u);
+        while (offset < 4u && size > 0u)
         {
-            ((uint8_t*)&word)[offset] = *buf;
+            ((uint8_t *)&word)[offset] = *buf;
             buf++;
             addr++;
             size--;
@@ -462,27 +481,8 @@ void internal_flash_write(uint32_t addr, uint8_t *buf, uint32_t size)
             os_debug("ProgramWord fail!\n");
             break;
         }
-        #if 0
-        /* 固件写入打印 */
-        /* 每写入64字节时 */
-        if(0 == (addr - first_word_addr)% (900))
-        {
-            printf(".");
-            percent += 1;
-        }
-        /* 每写入1024个word, 即4096个字节时则换行 */
-//        if(0 == (addr - first_word_addr)%4096)
-//        {
-//            printf("\n");
-//        }
-        #endif
-        //percent = (uint8_t)(((double)(dwDataLen - size) / (double)dwDataLen) * 100.0 + 0.5);
-        //percent += 1;
-        //PrintProgressBar(percent);
     }
     FLASH_Lock();
-
-    return;
 }
 
 #if 0
@@ -514,35 +514,35 @@ void internal_flash_erase(uint32_t addr)
     {
         if( addr == internal_flash_table[i].start_addr)
         {
-            /* 找到对应地址*/
+            /* ?????????*/
             break;
         }
     }
 
-    /* 分区的最后sector */
+    /* ?????????sector */
     dwLastSector = GetSector(internal_flash_table[i].start_addr + internal_flash_table[i].size - 1);
 
 #if INTERNAL_FLASH_DEBUG
     printf("internal_flash_erase addr:0x%08x dwFirstSector:0x%04x dwLastSector:0x%04x\n", addr, dwFirstSector, dwLastSector);
 #endif
 
-    /* 仅当擦除地址为管理头地址时, 支持擦除整个分区 */
+    /* ?????????????????????, ?????????????? */
     if(addr == internal_flash_table[i].start_addr)
     {
         /* Unlock the Flash to enable the flash control register access */
         FLASH_Unlock();
 
-        /* 清除各种FLASH的标志位 */  
+        /* ???????FLASH????锟斤拷 */  
         FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
                         FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
 
         if(dwLastSector >= dwFirstSector)
         {
-            /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
+            /* VoltageRange_3 ?????(32锟斤拷)?????锟斤拷???锟斤拷???????????????????? */ 
             if (FLASH_EraseSector(dwFirstSector, VoltageRange_3) != FLASH_COMPLETE)
             {
                 os_debug("FLASH_EraseSector err!\n");
-                /*擦除出错，返回，实际应用中可加入处理 */
+                /*??????????????????????锟斤拷?????? */
                 return;
             }
             dwFirstSector += 8;
@@ -551,24 +551,24 @@ void internal_flash_erase(uint32_t addr)
 #endif
         }
 
-        /* 标记某个扇区已擦除 */
+        /* ??????????????? */
         //g_bySectorMap |= byFlag;
 
         FLASH_Lock();
     }
 #endif
-    /* internal flash仅支持顺序写, 不考虑覆盖写的擦除问题 */
+    /* internal flash????????锟斤拷, ?????????锟斤拷????????? */
     return;
 }		
 #endif
 /*****************************************************
  * @fn       internal_flash_erase
  * @brief    erase the whole sector that contains the given address
- * @note     入参 addr 是真实的Flash字节地址（和 internal_flash_read/write 保持
- *           一致的语义，也和 SPI Flash 那边 hw_erase 的地址语义保持一致），
- *           内部自己通过 GetSector() 换算成扇区号再调用 FLASH_EraseSector。
- *           调用方不需要也不应该关心/传入"扇区号"。
- * @param    addr : 真实的Flash字节地址
+ * @note     ??? addr ???????Flash????????? internal_flash_read/write ????
+ *           ???????锟斤拷??? SPI Flash ??? hw_erase ???????锟斤拷????????
+ *           ????????? GetSector() ???????????????? FLASH_EraseSector??
+ *           ???锟斤拷???????????锟斤拷???/????"??????"??
+ * @param    addr : ?????Flash?????
  * @retval   N/A
  *****************************************************/
 void internal_flash_erase(uint32_t addr)
@@ -578,15 +578,15 @@ void internal_flash_erase(uint32_t addr)
     /* Unlock the Flash to enable the flash control register access */
     FLASH_Unlock();
     
-    /* 清除各种FLASH的标志位 */  
+    /* ???????FLASH????锟斤拷 */  
     FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR | 
                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR);
 
-    /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
+    /* VoltageRange_3 ?????(32锟斤拷)?????锟斤拷???锟斤拷???????????????????? */ 
     if (FLASH_EraseSector(sector, VoltageRange_3) != FLASH_COMPLETE)
     {
         os_debug("FLASH_EraseSector err!\n");
-        /*擦除出错，返回，实际应用中可加入处理 */
+        /*??????????????????????锟斤拷?????? */
         FLASH_Lock();
         return;
     }
@@ -598,12 +598,12 @@ void internal_flash_erase(uint32_t addr)
 
 /*****************************************************
  * @fn       GetNextSectorAddr
- * @brief    给定一个地址，返回它所在扇区之后紧邻那个扇区的起始地址
- * @note     内部Flash各扇区大小不一致(16K/64K/128K)，不能像SPI Flash那样
- *           按固定步长折算擦除范围，调用方（flash_manage.c）通过反复调用
- *           这个函数从 start_addr 跳到 end_addr，逐个覆盖擦除范围内的所有扇区
- * @param    Address：地址
- * @retval   下一个扇区的起始地址
+ * @brief    ???????????????????????????????????????????????
+ * @note     ???Flash????????锟斤拷?????(16K/64K/128K)????????SPI Flash????
+ *           ??????????????????锟斤拷?????锟斤拷???flash_manage.c?????????????
+ *           ????????? start_addr ???? end_addr??????????????锟斤拷???????????
+ * @param    Address?????
+ * @retval   ?????????????????
  *****************************************************/
 uint32_t GetNextSectorAddr(uint32_t Address)
 {
@@ -620,7 +620,7 @@ uint32_t GetNextSectorAddr(uint32_t Address)
     if (Address < ADDR_FLASH_SECTOR_11) return ADDR_FLASH_SECTOR_11;
     if (Address < ADDR_FLASH_SECTOR_12) return ADDR_FLASH_SECTOR_12;
 
-    /* 超出已知的扇区表范围，按4K兜底前进一步，避免调用方死循环 */
+    /* ?????????????????锟斤拷????4K??????????????????锟斤拷?????? */
     return Address + SECTOR_SIZE;
 }
 
@@ -637,7 +637,7 @@ void internal_flash_erase_all(void)
     /* Unlock the Flash to enable the flash control register access */
     FLASH_Unlock();
 
-    /* 清除各种FLASH的标志位 */  
+    /* ???????FLASH????锟斤拷 */  
     FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR  | FLASH_FLAG_WRPERR | 
                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR | FLASH_FLAG_PGSERR); 
 

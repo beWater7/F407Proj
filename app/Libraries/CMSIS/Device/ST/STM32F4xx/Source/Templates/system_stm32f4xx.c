@@ -348,9 +348,9 @@
      through STLINK MCO pin of STM32F103 microcontroller. The frequency cannot be changed
      and is fixed at 8 MHz. 
      Hardware configuration needed for Nucleo Board:
-     – SB54, SB55 OFF
-     – R35 removed
-     – SB16, SB50 ON */
+     ï¿½ SB54, SB55 OFF
+     ï¿½ R35 removed
+     ï¿½ SB16, SB50 ON */
 /* #define USE_HSE_BYPASS */
 
 #if defined(USE_HSE_BYPASS)     
@@ -517,13 +517,15 @@ void SystemInit(void)
      AHB/APBx prescalers and Flash settings ----------------------------------*/
   SetSysClock();
 
-  /* Configure the Vector Table location — APP ??? 0x08008000
-   * ???? VTOR???? Boot(0x08000000)?FreeRTOS ? svc 0 ?? Boot ?
-   * Default_Handler ????????? vTaskStartScheduler? */
+  /* VTOR ?????????????? APP1(0x08008000)/APP2(0x08060000) ??????
+   * ???? APP_DATA_BASE?? APP2 ???????? APP1?????????? */
 #ifdef VECT_TAB_SRAM
   SCB->VTOR = SRAM_BASE | VECT_TAB_OFFSET;
 #else
-  SCB->VTOR = APP_DATA_BASE | VECT_TAB_OFFSET; /* 0x08008000 */
+  {
+    extern uint32_t g_pfnVectors[];
+    SCB->VTOR = ((uint32_t)g_pfnVectors) & (uint32_t)0xFFFFFF80u;
+  }
 #endif
 
     /* HARD FAULT CHECK ADDED BY LDY */
@@ -767,7 +769,7 @@ static void SetSysClock(void)
     RCC->CFGR |= RCC_CFGR_SW_PLL;
 
     /* Wait till the main PLL is used as system clock source */
-    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL);
+    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL)
     {
     }
   }
@@ -836,7 +838,7 @@ static void SetSysClock(void)
     RCC->CFGR |= RCC_CFGR_SW_PLL;
 
     /* Wait till the main PLL is used as system clock source */
-    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL);
+    while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL)
     {
     }
   }
@@ -877,7 +879,7 @@ static void SetSysClock(void)
   RCC->CFGR |= RCC_CFGR_SW_PLL;
   
   /* Wait till the main PLL is used as system clock source */
-  while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL);
+  while ((RCC->CFGR & (uint32_t)RCC_CFGR_SWS ) != RCC_CFGR_SWS_PLL)
   {
   }
 #endif /* USE_HSE_BYPASS */  

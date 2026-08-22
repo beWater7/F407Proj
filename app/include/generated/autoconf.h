@@ -1,0 +1,1 @@
+#define CONFIG_APP_ESP8266 1

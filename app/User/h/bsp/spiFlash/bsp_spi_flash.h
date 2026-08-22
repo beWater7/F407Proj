@@ -16,7 +16,7 @@
 #define SPI_FLASH_PerWritePageSize      256
 
 /* Private define ------------------------------------------------------------*/
-/*ÃüÁî¶¨Òå-¿ªÍ·*******************************/
+/*ï¿½ï¿½ï¿½î¶¨ï¿½ï¿½-ï¿½ï¿½Í·*******************************/
 #define W25X_WriteEnable		      0x06 
 #define W25X_WriteDisable		      0x04 
 #define W25X_ReadStatusReg		    0x05 
@@ -36,10 +36,10 @@
 
 #define WIP_Flag                  0x01  /* Write In Progress (WIP) flag */
 #define Dummy_Byte                0xFF
-/*ÃüÁî¶¨Òå-½áÎ²*******************************/
+/*ï¿½ï¿½ï¿½î¶¨ï¿½ï¿½-ï¿½ï¿½Î²*******************************/
 
 
-/*SPI½Ó¿Ú¶¨Òå-¿ªÍ·****************************/
+/*SPIï¿½Ó¿Ú¶ï¿½ï¿½ï¿½-ï¿½ï¿½Í·****************************/
 #define FLASH_SPI                           SPI1
 #define FLASH_SPI_CLK                       RCC_APB2Periph_SPI1
 #define FLASH_SPI_CLK_INIT                  RCC_APB2PeriphClockCmd
@@ -78,21 +78,23 @@
 #define SPI_FLASH_DMA_RX_TCFLAG             DMA_FLAG_TCIF0
 #define SPI_FLASH_DMA_CHUNK                 16384U
 #define SPI_FLASH_DMA_MIN_LEN               32U
-/*SPI½Ó¿Ú¶¨Òå-½áÎ²****************************/
+/*SPIï¿½Ó¿Ú¶ï¿½ï¿½ï¿½-ï¿½ï¿½Î²****************************/
 
-/*µÈ´ı³¬Ê±Ê±¼ä*/
+/*ï¿½È´ï¿½ï¿½ï¿½Ê±Ê±ï¿½ï¿½*/
 #define SPIT_FLAG_TIMEOUT         ((uint32_t)0x1000)
 #define SPIT_LONG_TIMEOUT         ((uint32_t)(10 * SPIT_FLAG_TIMEOUT))
 
-/*ĞÅÏ¢Êä³ö*/
+/*ï¿½ï¿½Ï¢ï¿½ï¿½ï¿½*/
 #define FLASH_DEBUG_ON         1
 
 #define FLASH_INFO(fmt,arg...)           printf("<<-FLASH-INFO->> "fmt"\n",##arg)
 #define FLASH_ERROR(fmt,arg...)          printf("<<-FLASH-ERROR->> "fmt"\n",##arg)
+#ifndef FLASH_DEBUG
 #define FLASH_DEBUG(fmt,arg...)          do{\
                                           if(FLASH_DEBUG_ON)\
                                           printf("<<-FLASH-DEBUG->> [%d]"fmt"\n",__LINE__, ##arg);\
                                           }while(0)
+#endif
 
 
 #define FW_WRITTEN_FLAG   ((uint32_t)0x00000017)
@@ -116,7 +118,7 @@ void SPI_FLASH_WriteEnable(void);
 void SPI_FLASH_WaitForWriteEnd(void);
 
 
-/* === å¤?é?¨é©±å?¨æ?¥å£ï¼?é??è?ªå·±æä¾?ï¼? === */
+/* === ï¿½?ï¿½?ï¿½é©±ï¿½?ï¿½ï¿½?ï¿½å£ï¿½?ï¿½??ï¿½?ï¿½å·±æï¿½?ï¿½? === */
 //bool spi_flash_write(uint32_t addr, const uint8_t *data, uint32_t len);
 //bool spi_flash_read(uint32_t addr, uint8_t *data, uint32_t len);
 

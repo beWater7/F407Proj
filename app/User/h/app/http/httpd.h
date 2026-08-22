@@ -319,5 +319,7 @@ struct http_state {
 
 #define XXX_PROTOCOL "/protocol/"
 void httpd_init(void);
+/** 关闭除 keep 外所有 HTTP 连接，释放其 web 读缓冲（OTA 腾堆用） */
+void httpd_close_all_except(void *keep_http_state);
 
 #endif /* __HTTPD_H__ */

@@ -32,22 +32,31 @@
 #include "devConfig.h"
 #include "dev_manage.h"
 #include "shell_control.h"
+#if defined(CONFIG_APP_DHT11)
 #include "bsp_dht11.h"
+#endif
 #include "log.h"
 #include "export.h"
+#if defined(CONFIG_APP_MULTIBUTTON)
 #include "multi_button.h"
+#endif
+#if defined(CONFIG_APP_ESP8266)
 #include "bsp_esp8266.h"
 #include "bsp_esp8266_test.h"
+#endif
 #include "core_delay.h"
 #include "crc.h"
 #include "httpd.h"
+#if defined(CONFIG_APP_TELNET)
 #include "telnet.h"
+#endif
 #include "lwip/tcpip.h"
 #include "netconf.h"
 #include "sntp_api.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "bsp_timer.h"
+#include "upgrade.h"
 #include "malloc.h"
 
 #define SOFT_VERSION_LOCAL "V1.0.0"
@@ -55,7 +64,6 @@
 /* ?????????, ????????????, ???��???????????????????????????? */
 
 #define FREERTOS_HEAP_USE_EXRAM  1 /* 1=外部PSRAM堆(web/OTA大块分配) 0=内部SRAM */
-#define SNTP_ENABLED            1
 
 
 /* FreeRTOS heap_4：放 PSRAM，由 os_malloc(=pvPortMalloc) 分配 web/OTA 等大块 */
@@ -79,12 +87,16 @@ extern __IO uint8_t DHCP_state;
 
 uint8_t byWebUpgrade = 1;
 os_sem_t eth_rx_sem;
+#if defined(CONFIG_APP_MULTIBUTTON)
 static Button btn1, btn2;
+#endif
 
 /* ??????? */
 QueueHandle_t MQTT_Data_Queue = NULL;
 /* MQTT ?????????????? */
+#if defined(CONFIG_APP_DHT11)
 DHT11_Data_TypeDef DHT11_Data;
+#endif
 #define  MQTT_QUEUE_LEN    4   /* ???��???????????????????? */
 #define  MQTT_QUEUE_SIZE   4   /* ??????????????��?????? */
 
@@ -216,26 +228,13 @@ int stack_detect_guard(void)
 #endif
 
 volatile uint32_t idle_counter = 0;
-volatile uint32_t idle_max = 0;
 
-//#define MAX_IDLE_COUNT 100000  // ??????????????????????idle??
 void vApplicationIdleHook(void)
 {
     // ????????????????????????????
     idle_counter++;
-}
-
-void vCPUStatTask(void *pvParameters) {
-    for (;;) {
-        vTaskDelay(pdMS_TO_TICKS(1000)); // 1s
-        if (idle_counter > idle_max) {
-            idle_max = idle_counter; // ????????????????? MAX_IDLE_COUNT
-        }
-        printf("idle=%lu, cpu_load=%lu%%\n",
-               idle_counter,
-               100 - (idle_counter * 100 / idle_max));
-        idle_counter = 0;
-    }
+    /* 看门狗在空闲任务里喂：任何忙等循环都必须让出 CPU 让 idle 运行 */
+    IWDG_ReloadCounter();
 }
 
 /* ????????????? */
@@ -291,9 +290,12 @@ uint8_t getWebUpgrade(void)
  *****************************************************/
 void spi_flash_region_init(void)
 {
-    // ???????????????????????????
     //SPI_FLASH_BulkErase();
     dev_register(SPI_FLASH_DEV_ID, &g_stSpiFlashPart.dev);
+
+    /* SPI 与 bootloader 约定：每分区前 4K 管理头，size_used 写回 Flash。
+     * 以前 byManage 默认为 0，写入不偏移、不更新头 → boot 读 APP1 偏移错位且 used_size=0，OTA 不生效。 */
+    g_stSpiFlashPart.byManage = 1;
 
     FlashPartition_Init(&g_stSpiFlashPart, spi_flash_table, SPIFLASH_PART_NUM, &spi_flash_ops);
 }
@@ -333,11 +335,11 @@ void partition_info_show(void)
     STORAGE_PART_INFO_T *part = NULL;
     PartitionHeader hdr = {0};
 
-    /* update spi flash hdr info（仅启用管理头时才有独立 hdr） */
+    /* 从分区管理头刷新 size_used（PartitionRead 读的是数据区，不能用来读头） */
     if (g_stSpiFlashPart.byManage) {
         for(i = 0; i < SPI_FLASH_PART_MAX; i++)
         {
-            PartitionRead(i, 0, (uint8_t *)&hdr, sizeof(PartitionHeader), SPI_FLASH_DEV_ID);
+            SPI_FLASH_BufferRead(spi_flash_table[i].start_addr, (uint8_t *)&hdr, sizeof(PartitionHeader));
 
             calc_crc = crc32_checksum((uint8_t *)&hdr, sizeof(hdr) - sizeof(hdr.crc));
 
@@ -359,10 +361,8 @@ void partition_info_show(void)
                 CUSTOM_ASSERT(NULL == gstFlashManage[i].pStorageCtrl, return);
                 part = &(gstFlashManage[i].pStorageCtrl->pPartInfo[j]);
                 CUSTOM_ASSERT(NULL == part, return);
-                __os_printf("%-8s   addr:0x%08x  size:0x%-8x  size_used:%-6d\n", part->name,    \
-                                                                             part->start_addr,  \
-                                                                             part->size,        \
-                                                                             part->size_used);
+                __os_printf("%-8s   addr:0x%08lx  size:0x%-8lx  size_used:%-6lu\n", part->name,    \
+                    (unsigned long)part->start_addr, (unsigned long)part->size, (unsigned long)part->size_used);
 
             }
             __os_printf("----------------------------------------------------------\n\n");
@@ -399,6 +399,7 @@ static void Network_task(void *arg)
         ETH_CheckLinkStatus(ETHERNET_PHY_ADDRESS);
         if (diag_cnt < 5)
         {
+            #if 0
             extern __IO uint32_t EthStatus;
             uint16_t bsr = ETH_ReadPHYRegister(ETHERNET_PHY_ADDRESS, PHY_BSR);
             printf("ETH diag: up=%d link=%d EthStatus=0x%lx BSR=0x%04x IP=%d.%d.%d.%d\n",
@@ -408,6 +409,7 @@ static void Network_task(void *arg)
                    (unsigned)bsr,
                    (int)ip4_addr1(&gnetif.ip_addr), (int)ip4_addr2(&gnetif.ip_addr),
                    (int)ip4_addr3(&gnetif.ip_addr), (int)ip4_addr4(&gnetif.ip_addr));
+            #endif
             diag_cnt++;
         }
 #ifdef USE_DHCP
@@ -430,9 +432,9 @@ static void Network_task(void *arg)
 
 uint8_t read_button_gpio(uint8_t button_id);
 
+static void test_task(void *arg) __attribute__((unused));
 static void test_task(void *arg)
 {
-    uint8_t flag = 1;
     FOREVER
     {
         printf("key1 status:%d\n", read_button_gpio(1));
@@ -523,6 +525,7 @@ static void ETH_CheckFrameReceived_task(void *arg)
 }
 
 
+static void sysInfo_task(void *arg) __attribute__((unused));
 static void sysInfo_task(void *arg)
 {
     while(1)
@@ -558,14 +561,14 @@ void hard_fault_handler_c(uint32_t *stack)
     uint32_t psr = stack[7];
 
     printf("HardFault Detected!\n");
-    printf("R0 : 0x%08X\n", r0);
-    printf("R1 : 0x%08X\n", r1);
-    printf("R2 : 0x%08X\n", r2);
-    printf("R3 : 0x%08X\n", r3);
-    printf("R12: 0x%08X\n", r12);
-    printf("LR : 0x%08X (return address)\n", lr);
-    printf("PC : 0x%08X (fault address)\n", pc);
-    printf("PSR: 0x%08X\n", psr);
+    printf("R0 : 0x%08lX\n", (unsigned long)r0);
+    printf("R1 : 0x%08lX\n", (unsigned long)r1);
+    printf("R2 : 0x%08lX\n", (unsigned long)r2);
+    printf("R3 : 0x%08lX\n", (unsigned long)r3);
+    printf("R12: 0x%08lX\n", (unsigned long)r12);
+    printf("LR : 0x%08lX (return address)\n", (unsigned long)lr);
+    printf("PC : 0x%08lX (fault address)\n", (unsigned long)pc);
+    printf("PSR: 0x%08lX\n", (unsigned long)psr);
 
     // ??? FreeRTOS ???????
     if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
@@ -574,7 +577,16 @@ void hard_fault_handler_c(uint32_t *stack)
         printf("Current Task: %s\n", pcTaskGetName(current_task));
     }
 
-    while (1);  // ?????????????
+    /* IWDG 会在 ~8s 后兜底复位；这里主动复位以缩短停机时间 */
+    printf("HardFault: rebooting in 3s...\n");
+    {
+        volatile uint32_t d;
+        for (d = 0; d < 3000000U; d++) {
+            __NOP();
+        }
+    }
+    NVIC_SystemReset();
+    while (1);  // 复位失败才走到这里
 }
 
 
@@ -585,6 +597,25 @@ void hard_fault_handler_c(uint32_t *stack)
  * @param    ${4:??}
  * @retval   ${5:??}
  *****************************************************/
+/*****************************************************
+ * @fn       bsp_iwdg_init
+ * @brief    独立看门狗：HardFault/死循环时 ~8s 自动复位
+ * @note     喂狗在 vApplicationIdleHook（空闲任务）；阻塞式 sleep
+ *           期间空闲任务会运行，不会误复位。
+ *****************************************************/
+static void bsp_iwdg_init(void)
+{
+    /* LSI ~32kHz，128 分频 → 250Hz；reload 2000 → 8s 超时 */
+    RCC_LSICmd(ENABLE);
+    while (RCC_GetFlagStatus(RCC_FLAG_LSIRDY) == RESET) {
+    }
+    IWDG_WriteAccessCmd(IWDG_WriteAccess_Enable);
+    IWDG_SetPrescaler(IWDG_Prescaler_128);
+    IWDG_SetReload(2000);
+    IWDG_ReloadCounter();
+    IWDG_Enable();
+}
+
 void board_bsp_init(void)
 {
     /* ????????? */
@@ -615,6 +646,12 @@ void board_bsp_init(void)
                   (id == sFLASH_ID) ? "OK" : "UNEXPECTED");
     }
 
+    /* DWT 供 DHT11 等微秒延时；DHT11_Init 延后到首次读取，避免影响启动 */
+    CPU_TS_TmrInit();
+
+    /* 最后使能看门狗：前面的初始化都是线性执行，8s 窗口足够 */
+    bsp_iwdg_init();
+
     os_printf(KERN_WARN"board bsp init success %s\r\n",__DATE__);
 
     return;
@@ -642,7 +679,7 @@ void network_init()
     lwip_netif_init();
 
     /* ????????????????????????????freeRTOS???????��?????128(??????) */
-    sys_thread_new("check_Ethframe_task", ETH_CheckFrameReceived_task, NULL, 128, TASK_PRIORITY_HIGH);
+    sys_thread_new("check_Ethframe_task", ETH_CheckFrameReceived_task, NULL, 256, TASK_PRIORITY_HIGH);
 
     os_printf(KERN_WARN"eth driver init!\r\n");
 }
@@ -650,17 +687,17 @@ void network_init()
 
 void network_app_init(void)
 {
-#if SNTP_ENABLED
-    /* sntp ????????? */
+#if defined(CONFIG_APP_SNTP)
     bsp_sntp_init();
 #endif
     /* webserver Init */
     httpd_init();
-    /* 勿无 setWebUpgrade(1)：空分区会把垃圾当 web 头解析并刷爆串口。
+    /* 勿用 setWebUpgrade(1)：空分区会把垃圾当 web 头解析并刷爆串口。
      * 仅在 upgrade_web() 写成功后置位。 */
 
-    /* telnet???????? */
+#if defined(CONFIG_APP_TELNET)
     telnet_server_init();
+#endif
 
     os_printf(KERN_WARN"network app init!\r\n");
 }
@@ -748,6 +785,7 @@ void getBuildDate(char *buildInfo)
 {
     uint8 year = 0, mon = 0, day = 0;
     const char *monthStr = NULL;
+    (void)monthStr;
     const char *buildDate = __DATE__; // ???????: "Oct 19 2025"
     char monthStrBuf[4] = {0};
     int fullYear = 0;
@@ -787,24 +825,18 @@ void getBuildDate(char *buildInfo)
     }
     else
     {
-        os_printf("build time: %04u%02u%02u %s\n", fullYear, mon, day, __TIME__);
+        os_printf("build time: %04u%02u%02u %s  VTOR=0x%08lx %s\n",
+                  fullYear, mon, day, __TIME__,
+                  (unsigned long)SCB->VTOR,
+                  (SCB->VTOR == 0x08060000UL) ? "(APP2)" : "(APP1)");
     }
 }
 
 
+#if defined(CONFIG_APP_DHT11)
 uint8_t DH11_read(DHT11_Data_TypeDef *DH11_data)
 {
-    static uint8_t i = 0;    
-    if(NULL == DH11_data)
-    {
-        return ERROR;
-    }
-
-    i++;
-    i = (i >= 20 ? 0:i);
-    DH11_data->humidity    =  i + 20.0;
-    DH11_data->temperature =  i + 40.0;
-    return SUCCESS;
+    return DHT11_Read_TempAndHumidity(DH11_data);
 }
 
 
@@ -821,16 +853,13 @@ static void mqtt_data_send_task(void* parameter)
     DHT11_Data_TypeDef* send_data = NULL;
     while (1)
     {
-        taskENTER_CRITICAL();           //?????????
-        /* ??��?????, ?????????????�I */
-        //res = DHT11_Read_TempAndHumidity(&DHT11_Data);
-        res = DH11_read(&DHT11_Data);
-        taskEXIT_CRITICAL();            //????????
+        /* DHT11 内部已关中断采样，勿再包一层过长 critical */
+        res = DHT11_Read_TempAndHumidity(&DHT11_Data);
         send_data = &DHT11_Data;
         if(SUCCESS == res)
         {
-            printf("humidity = %f , temperature = %f\n",
-                    DHT11_Data.humidity,DHT11_Data.temperature);
+            printf("humidity = %.1f%% , temperature = %.1fC\n",
+                    DHT11_Data.humidity, DHT11_Data.temperature);
             xReturn = xQueueSend(MQTT_Data_Queue, /* ??????��??? */
                                  &send_data,       /* ???????????? */
                                  0 );              /* ?????? 0 */
@@ -846,26 +875,23 @@ static void mqtt_data_send_task(void* parameter)
 }
 
 
+#endif /* CONFIG_APP_DHT11 */
+
+#if defined(CONFIG_APP_ESP8266)
 static void esp8266_recv_task(void* parameter)
 {
-	/* LED TEST */
-    #if 0
-    printf ( "\r\n??? WF-ESP8266 WiFi??????????\r\n" );                          //?????????????????
-	printf ( "\r\n????????????????????????????????????????????????RGB??\r\n" );    //?????????????????
-    printf ( "\r\nLED_RED\r\nLED_GREEN\r\nLED_BLUE\r\nLED_YELLOW\r\nLED_PURPLE\r\nLED_CYAN\r\nLED_WHITE\r\nLED_RGBOFF\r\n" );  
-    #endif
-    ESP8266_StaTcpClient_Unvarnish_ConfigTest();                          //??ESP8266????????
-
-    // printf ( "\r\n??????????????????????????  ??????????????????RGB???\r\n" );    //?????????????????
-    // printf ( "\r\nLED_RED\r\nLED_GREEN\r\nLED_BLUE\r\nLED_YELLOW\r\nLED_PURPLE\r\nLED_CYAN\r\nLED_WHITE\r\nLED_RGBOFF\r\n" );
-    // printf ( "\r\n???RGB??????��\r\n" );
-
+    /* 启动后先处理 Init 置的 pending：拉高 CH_PD、AT 连 AP。
+     * 不能在 ESP8266_Init() 里同步 JoinAP，会长时间占住 app_main。 */
     FOREVER
     {
-        ESP8266_CheckRecvDataTest(); // ESP8266 ???????????????????
+        ESP8266_ProcessPendingWifiReconfig();
+        /* 先排空接收帧（含上一次请求的 +IPD），再决定是否发起新一轮天气请求 */
+        ESP8266_CheckRecvDataTest();
+        ESP8266_WeatherPoll();
         os_sleep_ms(200);
     }
 }
+#endif /* CONFIG_APP_ESP8266 */
 
 /*----------------DRIVER---------------- */
 INIT_EXPORT(dev_init, EXPORT_DRIVER);
@@ -889,6 +915,7 @@ INIT_EXPORT(devPara_init, EXPORT_DEVICE);
 INIT_EXPORT(shell_init_all, EXPORT_APP);
 
 
+#if defined(CONFIG_APP_MULTIBUTTON)
 // Hardware abstraction layer function
 // This simulates reading GPIO states
 uint8_t read_button_gpio(uint8_t button_id)
@@ -987,6 +1014,8 @@ void buttons_init(void)
     button_start(&btn2);
 }
 
+#endif /* CONFIG_APP_MULTIBUTTON */
+
 
 #if defined(__CC_ARM) || defined(__ARMCC_VERSION)
 int main(void)
@@ -994,14 +1023,35 @@ int main(void)
 static int app_main(void)
 #endif
 {
-    printf("APP running!\r\n");
+    uint32_t vtor = SCB->VTOR;
+    uint32_t slot;
+
+    if (vtor == APP2_ADDRESS) {
+        slot = 2;
+    } else if (vtor == APP1_ADDRESS) {
+        slot = 1;
+    } else {
+        slot = 0; /* 未知 */
+    }
+    printf("APP running! VTOR=0x%08lX slot=APP%lu (APP1=0x%08lX APP2=0x%08lX) fn=0x%08lX\r\n",
+           (unsigned long)vtor,
+           (unsigned long)slot,
+           (unsigned long)APP1_ADDRESS,
+           (unsigned long)APP2_ADDRESS,
+           (unsigned long)(uint32_t)(void *)app_main);
     xplat_run();
     /* ????shell cmd ???? */
     //sys_thread_new("sysInfo_task", sysInfo_task, NULL, 128, TASK_PRIORITY_NORMAL);
 
+#if defined(CONFIG_APP_MULTIBUTTON)
     buttons_init();
+#endif
 
-    sys_thread_new("network_task", Network_task, NULL, 128, TASK_PRIORITY_NORMAL);
+    {
+        TaskHandle_t h;
+        h = (TaskHandle_t)sys_thread_new("network_task", Network_task, NULL, 256, TASK_PRIORITY_NORMAL);
+        ota_register_background_task(h);
+    }
 
     //sys_thread_new("key_event", key_event_task, NULL, 128, TASK_PRIORITY_NORMAL);
 
@@ -1029,21 +1079,24 @@ static int app_main(void)
 #endif
 
 #if 1 /* 串口 shell：从 rx_queue 取数交给 shell_input */
-    sys_thread_new("shell_task", shell_task, NULL, 256, TASK_PRIORITY_NORMAL);
+    {
+        TaskHandle_t h;
+        h = (TaskHandle_t)sys_thread_new("shell_task", shell_task, NULL, 384, TASK_PRIORITY_NORMAL);
+        ota_register_background_task(h);
+    }
 #endif
     os_printf(KERN_WARN"APP init success\r\n");
     getBuildDate(NULL);
 #ifdef SOFT_VERSION
-    os_printf("soft version:%d\n", SOFT_VERSION);
+    os_printf("333soft version:%d\n", SOFT_VERSION);
 #else
-    os_printf(KERN_WARN"soft version:%s\n", SOFT_VERSION_LOCAL);
+    os_printf(KERN_WARN"333soft version:%s\n", SOFT_VERSION_LOCAL);
 #endif
 
-#if ESP8266_ENABLED
-    CPU_TS_TmrInit();                                                     //?????DWT???????????????????
+#if defined(CONFIG_APP_ESP8266)
 	ESP8266_Init();
 
-    sys_thread_new("esp8266_recv", esp8266_recv_task, NULL, 256, TASK_PRIORITY_NORMAL);
+    sys_thread_new("esp8266_recv", esp8266_recv_task, NULL, 1024, TASK_PRIORITY_NORMAL);
 #endif
     // SPI_FLASH_ERASE_ALL(PART_WEB);
 
@@ -1057,6 +1110,7 @@ static int app_main(void)
 
 
     vTaskDelete(NULL);
+    return 0;
 }
 
 

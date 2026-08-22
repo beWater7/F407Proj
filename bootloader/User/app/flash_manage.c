@@ -15,6 +15,7 @@
 #include "bsp_internalFlash.h"
 #include "iap.h"
 #include "crc.h"
+#include "bsp_led.h"
 
 extern STORAGE_HW_OPS_T spi_flash_ops; 
 extern STORAGE_HW_OPS_T internal_flash_ops;
@@ -60,10 +61,28 @@ static int flash_partition_erase(STORAGE_CTRL_T *self,  uint8_t index, uint32_t 
     }
     else
     {
-        /* 内部flash */
-        sector_start = GetSector(start_addr);
-        sector_end  = GetSector(end_addr-1);
-        dwUnitLen = 8;
+        /*
+         * 内部 Flash：hw_erase(internal_flash_erase) 要的是【字节地址】，
+         * 内部再 GetSector()。以前把 GetSector() 扇区号当地址传入，
+         * GetSector(0x10) 会落到 Sector11，APP1 区根本没擦 → 写后 CRC 必挂。
+         */
+        uint32_t last = (end_addr > start_addr) ? (end_addr - 1U) : start_addr;
+
+        STOR_PRINT("erase internal [0x%08x ~ 0x%08x]\n", start_addr, end_addr);
+        for (addr = start_addr; addr <= last; ) {
+            uint32_t next;
+
+            HW_ERASE(addr);
+            if (PART_FW1 == index || PART_FW2 == index) {
+                LED1_TOGGLE; /* 擦固件区时闪红，提示仍在升级 */
+            }
+            next = GetNextSectorAddr(addr);
+            if (next <= addr) {
+                break;
+            }
+            addr = next;
+        }
+        return 0;
     }
 
     STOR_PRINT("erase sector start:0x%x end:0x%x dwUnitLen:%d\n", sector_start,sector_end,dwUnitLen);
@@ -72,6 +91,9 @@ static int flash_partition_erase(STORAGE_CTRL_T *self,  uint8_t index, uint32_t 
     for(addr = sector_start; addr <= sector_end; addr += dwUnitLen)
     {
         HW_ERASE(addr); // 擦除扇区
+        if (PART_FW1 == index || PART_FW2 == index) {
+            LED1_TOGGLE;
+        }
     }
 
     return 0;
@@ -92,6 +114,7 @@ static int flash_partition_write(STORAGE_CTRL_T *self, uint8_t index, uint32_t o
     uint32_t start_addr = self->pPartInfo[index].start_addr;
     uint32_t write_addr = start_addr + offset;  /* 数据区起始 + offset */
     uint32_t end_addr = 0;
+    (void)end_addr;
     uint32_t new_end = 0;
     uint32_t dwWriteLen = 0;
     uint32_t dwLen = 0;
@@ -113,6 +136,7 @@ static int flash_partition_write(STORAGE_CTRL_T *self, uint8_t index, uint32_t o
     }
 
     end_addr = write_addr + len;
+    (void)end_addr;
 
     /* offset为0表示覆盖写入,写入前擦除范围内数据 , offset不为0追加写入不进行擦除 */
     if(0 == offset)
@@ -305,13 +329,13 @@ uint32 PartitionErase(uint8_t index, uint32_t offset, uint8_t SectorNum, uint8_t
             break;
         case INTERNAL_FLASH_DEV_ID:
             CUSTOM_ASSERT(index >= INTERNAL_FLASH_PART_MAX, break);
+            /* hw_erase 要字节地址，不要 GetSector() 扇区号 */
             dwAddr = internal_flash_table[index].start_addr + offset;
-            dwAddr = GetSector(dwAddr);
             os_mutex_lock(g_stInternalFlashPart.storage_mutex);
             for(i = 0; i < SectorNum; i++)
             {
                 internal_flash_ops.hw_erase(dwAddr);
-                dwAddr += 8;
+                dwAddr = GetNextSectorAddr(dwAddr);
             }
             os_mutex_unlock(g_stInternalFlashPart.storage_mutex);
             break;
@@ -332,7 +356,9 @@ uint32 PartitionErase(uint8_t index, uint32_t offset, uint8_t SectorNum, uint8_t
 uint32 PartitionWrite(uint8_t index, uint32_t offset, uint8_t* data, uint32_t len, uint8_t id)
 {
     uint8_t  i = 0;
+    (void)i;
     uint8_t  bySectorNum = 0;
+    (void)bySectorNum;
     uint32_t dwEraseAddr = 0;
     uint32_t dwAddr = 0;
 
@@ -350,6 +376,7 @@ uint32 PartitionWrite(uint8_t index, uint32_t offset, uint8_t* data, uint32_t le
             //     bySectorNum++;
             // }
             bySectorNum = ((dwAddr + len - dwEraseAddr) + SECTOR_SIZE - 1) >> SECTOR_SHIFT;
+            (void)bySectorNum;
             STOR_PRINT("bySectorNum:%d\r\n", bySectorNum);
             os_mutex_lock(g_stSpiFlashPart.storage_mutex);
             #if 0
@@ -454,7 +481,9 @@ void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInf
 {
     uint32_t calc_crc = 0;
     uint32_t addr = 0;
+    (void)addr;
     uint32_t end_addr = 0;
+    (void)end_addr;
     PartitionHeader hdr = {0};
     uint8_t i = 0;
 
@@ -505,11 +534,12 @@ void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInf
         {
             #if 0
                         /* 管理头错误直接全擦除 */
-            os_debug("name:%s hdr.magic: %d hdr.crc: %d Partition header CRC error, 
-                      erasing whole partition...\n", 
+            os_debug("name:%s hdr.magic: %d hdr.crc: %d Partition header CRC error, "
+                      "erasing whole partition...\n",
                       self->pPartInfo[i].name, hdr.magic, hdr.crc);         
             addr = self->pPartInfo[i].start_addr;
             end_addr = addr + self->pPartInfo[i].size;
+            (void)end_addr;
             if(flash_partition_erase(self, i, addr, end_addr))
             {
                 os_debug("partition_erase err!\n");

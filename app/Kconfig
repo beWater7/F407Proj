@@ -1,0 +1,67 @@
+#
+# APP feature Kconfig（Boot 不裁减）
+# 用法：
+#   cd app && ./scripts/menuconfig.sh
+#   cd app && make
+#
+
+mainmenu "F407Proj Application Configuration"
+
+menu "Optional peripherals"
+
+config APP_ESP8266
+	bool "ESP8266 WiFi module"
+	default n
+	help
+	  USART AT ESP8266 driver and HTTP wifi config APIs.
+	  Disable to save flash/RAM when Ethernet-only.
+
+config APP_DHT11
+	bool "DHT11 temperature/humidity sensor"
+	default n
+	help
+	  DHT11 BSP and shell command "dht11".
+
+config APP_MULTIBUTTON
+	bool "Multi-button (GPIO keys)"
+	default n
+	help
+	  multi_button library and buttons_init() in main.
+	  TIM3 still runs; button_ticks() is skipped when disabled.
+
+config APP_CAN
+	bool "CAN peripheral (StdPeriph)"
+	default n
+	help
+	  Compile stm32f4xx_can.c. No product init path today;
+	  enable only if you use CAN.
+
+endmenu
+
+menu "Optional networking apps"
+
+config APP_TELNET
+	bool "Telnet server"
+	default n
+	help
+	  TCP telnet shell on port 23. Core USART shell stays on.
+
+config APP_SNTP
+	bool "SNTP time sync"
+	default n
+	help
+	  Compile sntp.c and enable bsp_sntp_init().
+	  RTC helpers (print_timestamp) stay built either way.
+
+endmenu
+
+menu "Optional storage"
+
+config APP_FATFS
+	bool "FatFs (ff.c / diskio.c)"
+	default n
+	help
+	  Compile FatFs. Web/OTA use SPI flash partitions directly;
+	  enable only if you need filesystem APIs.
+
+endmenu

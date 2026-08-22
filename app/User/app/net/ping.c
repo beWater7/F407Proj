@@ -6,6 +6,7 @@
 #include "lwip/timeouts.h"
 #include "lwip/raw.h"
 #include "ping.h"
+#include "os_mutex.h"
 
 
 #if 0
@@ -297,7 +298,7 @@ void ping(const ip_addr_t *target_addr) {
  * PING_DEBUG: Enable debugging for PING.
  */
 #ifndef PING_DEBUG
-#define PING_DEBUG     LWIP_DBG_ON
+#define PING_DEBUG     LWIP_DBG_OFF
 #endif
 
 /** ping receive timeout - in milliseconds */
@@ -328,9 +329,14 @@ void ping(const ip_addr_t *target_addr) {
 /* ping variables */
 static const ip_addr_t* ping_target;
 static u16_t ping_seq_num;
-#ifdef LWIP_DEBUG
 static u32_t ping_time;
-#endif /* LWIP_DEBUG */
+static volatile u8_t ping_awaiting;
+static volatile u8_t ping_got;
+static u32_t ping_tx;
+static u32_t ping_rx;
+static u32_t ping_rtt_sum;
+static u32_t ping_rtt_min;
+static u32_t ping_rtt_max;
 #if !PING_USE_SOCKETS
 static struct raw_pcb *ping_pcb;
 #endif /* PING_USE_SOCKETS */
@@ -530,35 +536,65 @@ ping_thread(void *arg)
 static u8_t
 ping_recv(void *arg, struct raw_pcb *pcb, struct pbuf *p, const ip_addr_t *addr)
 {
+  struct ip_hdr *iphdr;
   struct icmp_echo_hdr *iecho;
+  u16_t iphdr_hlen;
+  u8_t ttl;
+  u16_t seq;
+  u32_t rtt;
+  char from[16];
   LWIP_UNUSED_ARG(arg);
   LWIP_UNUSED_ARG(pcb);
-  LWIP_UNUSED_ARG(addr);
   LWIP_ASSERT("p != NULL", p != NULL);
 
-  if ((p->tot_len >= (PBUF_IP_HLEN + sizeof(struct icmp_echo_hdr))) &&
-      pbuf_remove_header(p, PBUF_IP_HLEN) == 0) {
-    iecho = (struct icmp_echo_hdr *)p->payload;
-
-    if ((iecho->id == PING_ID) && (iecho->seqno == lwip_htons(ping_seq_num))) {
-      LWIP_DEBUGF( PING_DEBUG, ("ping: recv "));
-      ip_addr_debug_print(PING_DEBUG, addr);
-      LWIP_DEBUGF( PING_DEBUG, (" %"U32_F" ms\n", (sys_now()-ping_time)));
-
-      PING_PRINT("ping: recv ");
-      IP4_ADDR_PRINT(addr);
-      PING_PRINT(" %"U32_F" ms\n", (sys_now()-ping_time));
-
-      /* do some ping result processing */
-      PING_RESULT(1);
-      pbuf_free(p);
-      return 1; /* eat the packet */
-    }
-    /* not eaten, restore original packet */
-    pbuf_add_header(p, PBUF_IP_HLEN);
+  if (p->tot_len < (PBUF_IP_HLEN + sizeof(struct icmp_echo_hdr))) {
+    return 0;
   }
 
-  return 0; /* don't eat the packet */
+  iphdr = (struct ip_hdr *)p->payload;
+  iphdr_hlen = (u16_t)(IPH_HL(iphdr) * 4);
+  if (iphdr_hlen < PBUF_IP_HLEN) {
+    iphdr_hlen = PBUF_IP_HLEN;
+  }
+  ttl = IPH_TTL(iphdr);
+
+  if (p->tot_len < (iphdr_hlen + sizeof(struct icmp_echo_hdr))) {
+    return 0;
+  }
+  if (pbuf_remove_header(p, iphdr_hlen) != 0) {
+    return 0;
+  }
+
+  iecho = (struct icmp_echo_hdr *)p->payload;
+  if ((ICMPH_TYPE(iecho) == ICMP_ER) &&
+      (iecho->id == PING_ID) &&
+      (iecho->seqno == lwip_htons(ping_seq_num))) {
+    if (ping_awaiting) {
+      ping_awaiting = 0;
+      ping_got = 1;
+      rtt = sys_now() - ping_time;
+      seq = lwip_ntohs(iecho->seqno);
+      ping_rx++;
+      ping_rtt_sum += rtt;
+      if (rtt < ping_rtt_min) {
+        ping_rtt_min = rtt;
+      }
+      if (rtt > ping_rtt_max) {
+        ping_rtt_max = rtt;
+      }
+      ipaddr_ntoa_r(addr, from, sizeof(from));
+      /* 40 = 8 ICMP hdr + 32 payload；与 ping -s 32 一致 */
+      __os_printf("%u bytes from %s: icmp_seq=%u ttl=%u time=%u ms\r\n",
+                  (unsigned)(sizeof(struct icmp_echo_hdr) + PING_DATA_SIZE),
+                  from, (unsigned)seq, (unsigned)ttl, (unsigned)rtt);
+    }
+    PING_RESULT(1);
+    pbuf_free(p);
+    return 1;
+  }
+
+  pbuf_add_header(p, iphdr_hlen);
+  return 0;
 }
 
 static void
@@ -568,10 +604,10 @@ __ping_send(struct raw_pcb *raw, const ip_addr_t *addr)
   struct icmp_echo_hdr *iecho;
   size_t ping_size = sizeof(struct icmp_echo_hdr) + PING_DATA_SIZE;
 
-  LWIP_DEBUGF( PING_DEBUG, ("ping: send "));
-  ip_addr_debug_print(PING_DEBUG, addr);
-  LWIP_DEBUGF( PING_DEBUG, ("\n"));
   LWIP_ASSERT("ping_size <= 0xffff", ping_size <= 0xffff);
+  if (raw == NULL) {
+    return;
+  }
 
   p = pbuf_alloc(PBUF_IP, (u16_t)ping_size, PBUF_RAM);
   if (!p) {
@@ -581,15 +617,16 @@ __ping_send(struct raw_pcb *raw, const ip_addr_t *addr)
     iecho = (struct icmp_echo_hdr *)p->payload;
 
     ping_prepare_echo(iecho, (u16_t)ping_size);
-
-    raw_sendto(raw, p, addr);
-#ifdef LWIP_DEBUG
+    ping_awaiting = 1;
+    ping_got = 0;
     ping_time = sys_now();
-#endif /* LWIP_DEBUG */
+    raw_sendto(raw, p, addr);
   }
   pbuf_free(p);
 }
 
+static void
+ping_timeout(void *arg) __attribute__((unused));
 static void
 ping_timeout(void *arg)
 {
@@ -638,8 +675,78 @@ ping_init(const ip_addr_t* ping_addr)
 #if PING_USE_SOCKETS
   sys_thread_new("ping_thread", ping_thread, NULL, DEFAULT_THREAD_STACKSIZE, DEFAULT_THREAD_PRIO);
 #else /* PING_USE_SOCKETS */
-  ping_raw_init();
+  if (ping_pcb == NULL) {
+    ping_raw_init();
+  }
 #endif /* PING_USE_SOCKETS */
+}
+
+void ping_run(const ip_addr_t *addr, int count)
+{
+  int i;
+  u32_t t0;
+  u32_t wait_start;
+  u32_t elapsed;
+  u32_t loss;
+  char ipstr[16];
+
+  if (addr == NULL) {
+    return;
+  }
+  if (count <= 0) {
+    count = 4;
+  }
+  if (count > 20) {
+    count = 20;
+  }
+
+  ping_init(addr);
+  ipaddr_ntoa_r(addr, ipstr, sizeof(ipstr));
+
+  ping_tx = 0;
+  ping_rx = 0;
+  ping_rtt_sum = 0;
+  ping_rtt_min = 0xFFFFFFFFu;
+  ping_rtt_max = 0;
+  ping_got = 0;
+  ping_awaiting = 0;
+
+  /* 32 payload + 8 ICMP + 20 IP = 60 */
+  __os_printf("PING %s (%s) %d(%d) bytes of data.\r\n",
+              ipstr, ipstr,
+              PING_DATA_SIZE,
+              PING_DATA_SIZE + (int)sizeof(struct icmp_echo_hdr) + 20);
+
+  t0 = sys_now();
+  for (i = 0; i < count; i++) {
+    ping_send((ip_addr_t *)addr);
+    ping_tx++;
+    wait_start = sys_now();
+    while (!ping_got && ((sys_now() - wait_start) < PING_RCV_TIMEO)) {
+      os_sleep_ms(10);
+    }
+    if (!ping_got) {
+      ping_awaiting = 0;
+      __os_printf("Request timeout for icmp_seq=%u\r\n",
+                  (unsigned)ping_seq_num);
+    }
+    elapsed = sys_now() - wait_start;
+    if ((i + 1 < count) && (elapsed < PING_DELAY)) {
+      os_sleep_ms(PING_DELAY - elapsed);
+    }
+  }
+
+  elapsed = sys_now() - t0;
+  loss = ping_tx ? ((ping_tx - ping_rx) * 100u / ping_tx) : 100u;
+  __os_printf("\r\n--- %s ping statistics ---\r\n", ipstr);
+  __os_printf("%u packets transmitted, %u received, %u%% packet loss, time %u ms\r\n",
+              (unsigned)ping_tx, (unsigned)ping_rx, (unsigned)loss, (unsigned)elapsed);
+  if (ping_rx > 0) {
+    __os_printf("rtt min/avg/max = %u/%u/%u ms\r\n",
+                (unsigned)ping_rtt_min,
+                (unsigned)(ping_rtt_sum / ping_rx),
+                (unsigned)ping_rtt_max);
+  }
 }
 
 
