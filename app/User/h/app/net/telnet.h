@@ -1,15 +1,7 @@
 /***************************************************************
- * @file    :  storage_manage.c
- * @author  :  LDY
- * @version :  1.0
- * @date    :  2025-06-28
- * @brief   :  存储分区初始化模块
- *
- * @note    :
- *
- * @copyright Copyright (c) [2025] [LDY/STM32F407]
+ * @file    :  telnet.h
+ * @brief   :  Telnet 服务（协议实现见 telnet.c，头文件不暴露 RTOS/lwIP 类型）
  ***************************************************************/
-
 #ifndef __TELNET_H__
 #define __TELNET_H__
 
@@ -17,8 +9,9 @@
 extern "C" {
 #endif
 
-#include "lwip/tcp.h"
-#include "lwip/sys.h"
+#include "os_types.h"
+
+struct tcp_pcb;
 
 #ifndef TELNETBUFFSIZE
 #define TELNETBUFFSIZE     256
@@ -27,8 +20,6 @@ extern "C" {
 #define TELNETSENDBUFFSIZE 1024
 #endif
 
-
-/* telnet会话状态 */
 typedef enum {
     TELNET_STATE_INIT,
     TELNET_STATE_AUTH,
@@ -36,33 +27,26 @@ typedef enum {
     TELNET_STATE_CLOSED
 } TELNET_SESSION_STATE;
 
-
 typedef struct telnet_session {
-    struct tcp_pcb *pcb;             // 当前会话的 TCP PCB
-    TELNET_SESSION_STATE state;      // 会话状态
-    char recv_buffer[TELNETBUFFSIZE];           // 输入缓冲区
-    uint8 send_buffer[TELNETSENDBUFFSIZE];           // 输出缓冲区
-    uint16_t recv_len;               // 接收数据长度
-    uint16_t send_len;               // 发送数据长度
-    SemaphoreHandle_t recv_sem;      // 接收数据的信号量
-    SemaphoreHandle_t send_sem;      // 发送数据的信号量
-    TaskHandle_t task_handle;        // FreeRTOS 任务句柄
-    void *user_context;              // 用户上下文数据（如用户名等）
+    struct tcp_pcb *pcb;
+    TELNET_SESSION_STATE state;
+    char recv_buffer[TELNETBUFFSIZE];
+    uint8 send_buffer[TELNETSENDBUFFSIZE];
+    uint16_t recv_len;
+    uint16_t send_len;
+    os_sem_t recv_sem;
+    os_sem_t send_sem;
+    os_task_handle task_handle;
+    void *user_context;
 } TELNET_SESSION_T, *TELNET_SESSION_PTR;
 
+void telnet_server_init(void);
 
-void telnet_server_init(void); 
+#define TELNETCLIDATADIV
+#define TELNETCLIENTNUM 3
 
-
-#define TELNETCLIDATADIV    //定义telnet客户数据分离
-    
-#define TELNETCLIENTNUM 3   //定义最大支持连个并发
-    
 #ifdef __cplusplus
 }
 #endif
 
-#endif /* __TYPEDEF_H__ */
-
-
-
+#endif /* __TELNET_H__ */

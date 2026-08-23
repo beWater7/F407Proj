@@ -112,7 +112,10 @@ void reset_print_color(void)
 
 void setDebugLevel(uint8 level)
 {
-    __printf_level__ = level;
+	/* 越界值会令 log_level_str[level] 读越界，打印出代码区乱码 */
+	if (level > DLEVEL_TRACE) level = DLEVEL_TRACE;
+	if (level < DLEVEL_ALERT) level = DLEVEL_ALERT;
+	__printf_level__ = level;
 }
 
 uint8 getDebugLevel(void)

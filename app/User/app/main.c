@@ -37,6 +37,8 @@
 #endif
 #include "log.h"
 #include "export.h"
+#include "os_mutex.h"
+#include "FreeRTOSConfig.h"
 #if defined(CONFIG_APP_MULTIBUTTON)
 #include "multi_button.h"
 #endif
@@ -53,8 +55,7 @@
 #include "lwip/tcpip.h"
 #include "netconf.h"
 #include "sntp_api.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "os_task.h"
 #include "bsp_timer.h"
 #include "upgrade.h"
 #include "malloc.h"
@@ -92,7 +93,7 @@ static Button btn1, btn2;
 #endif
 
 /* ??????? */
-QueueHandle_t MQTT_Data_Queue = NULL;
+os_queue_t MQTT_Data_Queue = NULL;
 /* MQTT ?????????????? */
 #if defined(CONFIG_APP_DHT11)
 DHT11_Data_TypeDef DHT11_Data;
@@ -571,10 +572,10 @@ void hard_fault_handler_c(uint32_t *stack)
     printf("PSR: 0x%08lX\n", (unsigned long)psr);
 
     // ??? FreeRTOS ???????
-    if (xTaskGetSchedulerState() != taskSCHEDULER_NOT_STARTED)
+    if (os_scheduler_running())
     {
-        TaskHandle_t current_task = xTaskGetCurrentTaskHandle();
-        printf("Current Task: %s\n", pcTaskGetName(current_task));
+        os_task_handle current_task = os_task_self();
+        printf("Current Task: %s\n", os_task_name(current_task));
     }
 
     /* IWDG 会在 ~8s 后兜底复位；这里主动复位以缩短停机时间 */
@@ -679,7 +680,7 @@ void network_init()
     lwip_netif_init();
 
     /* ????????????????????????????freeRTOS???????��?????128(??????) */
-    sys_thread_new("check_Ethframe_task", ETH_CheckFrameReceived_task, NULL, 256, TASK_PRIORITY_HIGH);
+    os_task_spawn("check_Ethframe_task", ETH_CheckFrameReceived_task, NULL, 256, TASK_PRIORITY_HIGH);
 
     os_printf(KERN_WARN"eth driver init!\r\n");
 }
@@ -730,12 +731,12 @@ int main(void)
     board_bsp_init();
     __enable_irq();
     printf("start FreeRTOS...\r\n");
-    if (sys_thread_new("main", main_task_entry, NULL, 512, 4) == NULL) {
+    if (os_task_spawn("main", main_task_entry, NULL, 512, 4) == NULL) {
         printf("create main task fail!\r\n");
         while (1) { }
     }
     printf("main task ok, start scheduler\r\n");
-    vTaskStartScheduler();
+    os_scheduler_start();
     printf("vTaskStartScheduler returned!\r\n");
     while (1) {
         sleep_10ms(10);
@@ -849,7 +850,7 @@ uint8_t DH11_read(DHT11_Data_TypeDef *DH11_data)
 static void mqtt_data_send_task(void* parameter)
 {	
     uint8_t res = 0;
-    BaseType_t xReturn = pdPASS;
+    os_status_t qret;
     DHT11_Data_TypeDef* send_data = NULL;
     while (1)
     {
@@ -860,7 +861,7 @@ static void mqtt_data_send_task(void* parameter)
         {
             printf("humidity = %.1f%% , temperature = %.1fC\n",
                     DHT11_Data.humidity, DHT11_Data.temperature);
-            xReturn = xQueueSend(MQTT_Data_Queue, /* ??????��??? */
+            qret = os_queue_send(MQTT_Data_Queue, /* ??????��??? */
                                  &send_data,       /* ???????????? */
                                  0 );              /* ?????? 0 */
             if(xReturn == pdTRUE)
@@ -1048,8 +1049,8 @@ static int app_main(void)
 #endif
 
     {
-        TaskHandle_t h;
-        h = (TaskHandle_t)sys_thread_new("network_task", Network_task, NULL, 256, TASK_PRIORITY_NORMAL);
+        os_task_handle h;
+        h = os_task_spawn("network_task", Network_task, NULL, 256, TASK_PRIORITY_NORMAL);
         ota_register_background_task(h);
     }
 
@@ -1066,8 +1067,7 @@ static int app_main(void)
 
     /* MQTT test start */
     /* ????Test_Queue */
-    MQTT_Data_Queue = xQueueCreate((UBaseType_t ) MQTT_QUEUE_LEN,/* ??????��???? */
-                                    (UBaseType_t) MQTT_QUEUE_SIZE);/* ??????�� */
+    MQTT_Data_Queue = os_queue_create(MQTT_QUEUE_LEN, MQTT_QUEUE_SIZE);/* ??????�� */
     if(NULL == MQTT_Data_Queue)
     {
         os_debug("create MQTT_Data_Queue fail!\r\n");
@@ -1080,8 +1080,8 @@ static int app_main(void)
 
 #if 1 /* 串口 shell：从 rx_queue 取数交给 shell_input */
     {
-        TaskHandle_t h;
-        h = (TaskHandle_t)sys_thread_new("shell_task", shell_task, NULL, 384, TASK_PRIORITY_NORMAL);
+        os_task_handle h;
+        h = os_task_spawn("shell_task", shell_task, NULL, 384, TASK_PRIORITY_NORMAL);
         ota_register_background_task(h);
     }
 #endif
@@ -1096,7 +1096,7 @@ static int app_main(void)
 #if defined(CONFIG_APP_ESP8266)
 	ESP8266_Init();
 
-    sys_thread_new("esp8266_recv", esp8266_recv_task, NULL, 1024, TASK_PRIORITY_NORMAL);
+    os_task_spawn("esp8266_recv", esp8266_recv_task, NULL, 1024, TASK_PRIORITY_NORMAL);
 #endif
     // SPI_FLASH_ERASE_ALL(PART_WEB);
 
@@ -1109,7 +1109,7 @@ static int app_main(void)
     // hex_dump(PART_CUSTOM, 4096, 1024, SPI_FLASH_DEV_ID);
 
 
-    vTaskDelete(NULL);
+    os_task_exit();
     return 0;
 }
 

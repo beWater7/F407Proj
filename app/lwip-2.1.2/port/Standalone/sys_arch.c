@@ -42,6 +42,7 @@
 
 #include <string.h>
 #include "malloc.h"
+#include "os_task.h"
 
 u32_t lwip_sys_now;
 extern uint32_t LocalTime;
@@ -402,18 +403,11 @@ sys_thread_new(const char *name, lwip_thread_fn function, void *arg, int stacksi
 //  /* threads not supported */
 //  return 0;
 
-	sys_thread_t handle = NULL;
-	BaseType_t xReturn = pdPASS;
-	/* 创建一个线程 */
-	xReturn = xTaskCreate((TaskFunction_t )function,  /* 线程入口函数 */
-	                 (const char*    )name,/* 线程名字 */
-	                 (uint16_t       )stacksize,  /* 线程栈大小 */
-	                 (void*          )arg,/* 线程入口函数参数 */
-	                 (UBaseType_t    )prio, /* 线程的优先级 */
-	                 (TaskHandle_t*  )&handle);/* 线程控制块指针 */
-	if (xReturn != pdPASS)
+	sys_thread_t handle = (sys_thread_t)os_task_spawn(name, (os_task_fn_t)function, arg,
+	                                                (uint16_t)stacksize, (uint8_t)prio);
+	if (handle == NULL)
 	{
-	 	printf("[sys_arch]:create task fail!err:%#lx\n",xReturn);
+	 	printf("[sys_arch]:create task fail!\n");
 	 	return NULL;
 	}
 

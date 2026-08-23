@@ -716,7 +716,7 @@ void telnet_session_task(void *arg)
     /* free之前要释放控制块资源 */
     os_free(session);
     /* 删除正在执行的任务 */
-    vTaskDelete(NULL);
+    os_task_exit();
 }
 
 

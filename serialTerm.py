@@ -22,6 +22,8 @@ ANSI_RE = re.compile(r'\x1b\[([0-9;]*)m')
 # 包尾可能只收到 ESC / ESC[ / ESC[1;33 半截 CSI，需跨包拼接
 ANSI_PARTIAL_RE = re.compile(r'\x1b(?:\[[0-9;]*)?$')
 SPLIT_RE = re.compile(r'\r\n|\n|\r')
+# 从 MCU help 列表解析命令名：固定 4 空格缩进的 "    cmd  Description" 行
+HELP_CMD_RE = re.compile(r'^    (.+?)\s{2,}\S', re.MULTILINE)
 # 设置编码
 sys.stdout.reconfigure(encoding='utf-8')
 
@@ -293,57 +295,88 @@ class SerialMonitor(tk.Tk):
 
         self.txt_output.bind("<Key>", self.on_key)
         self.txt_output.bind("<Return>", self.on_enter)
-        self.txt_output.bind("<BackSpace>", self._on_backspace) # 退格
-        self.txt_output.bind("<Delete>", self._on_delete)       # 删除键
+        self.txt_output.bind("<BackSpace>", self._on_backspace)
+        self.txt_output.bind("<Delete>", self._on_delete)
+        # 必须单独绑定，放在 on_key 里会被 Text 默认行为抢掉
+        self.txt_output.bind("<Up>", self._on_history_up)
+        self.txt_output.bind("<Down>", self._on_history_down)
+        self.txt_output.bind("<Tab>", self._on_tab)
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         #self.txt_output.delete(line_start, line_end)
 
-    def _get_editable_start(self):
-        """返回最后一行可编辑区的起始列号"""
-        last_line_start = self.txt_output.index("end-1c linestart")
-        last_line_text = self.txt_output.get(last_line_start, "end-1c")
-
-        # 假设 self.prompt_prefix_list 是一个列表，包含所有可能的提示符
-        if hasattr(self, 'prompt_prefix_list'):
-            for prefix in self.prompt_prefix_list:
-                if last_line_text.startswith(prefix):
-                    return len(prefix)
-                elif last_line_text.endswith(prefix):
-                    return len(last_line_text)
-        # 没匹配上任何提示符，则默认可编辑区从开头开始
+    def _get_editable_start(self, line_no=None):
+        """返回指定行提示符之后的可编辑起始列（默认当前光标行）"""
+        if line_no is None:
+            line_no = int(self.txt_output.index("insert").split('.')[0])
+        line_text = self.txt_output.get(f"{line_no}.0", f"{line_no}.end")
+        for prefix in self.prompt_prefix_list:
+            if line_text.startswith(prefix):
+                return len(prefix)
         return 0
+
+    def _find_input_line(self):
+        """找最后一行带提示符的输入行；没有则返回末行号"""
+        last = int(self.txt_output.index("end-1c").split('.')[0])
+        for ln in range(last, 0, -1):
+            text = self.txt_output.get(f"{ln}.0", f"{ln}.end")
+            for prefix in self.prompt_prefix_list:
+                if text.startswith(prefix):
+                    return ln
+        return last
+
+    def _focus_input_line(self):
+        """光标放到输入行末尾（提示符之后已有内容的后面）"""
+        line = self._find_input_line()
+        start = self._get_editable_start(line)
+        end_col = int(self.txt_output.index(f"{line}.end").split('.')[1])
+        self.txt_output.mark_set("insert", f"{line}.{max(start, end_col)}")
+        self.txt_output.see("end")
+
+    def _maybe_focus_input_line(self):
+        """仅当光标不在输入行可编辑区时才跳转，避免打字过程被拽回行首"""
+        line, col = map(int, self.txt_output.index("insert").split('.'))
+        input_line = self._find_input_line()
+        start = self._get_editable_start(input_line)
+        if line != input_line or col < start:
+            self._focus_input_line()
 
     def _on_backspace(self, event):
         line, col = map(int, self.txt_output.index("insert").split('.'))
-        last_line = int(self.txt_output.index("end-1c").split('.')[0])
-        editable_start = self._get_editable_start()
-        # 不在最后一行或光标在可编辑区前面，阻止删除
-        if line != last_line or col <= editable_start:
+        input_line = self._find_input_line()
+        editable_start = self._get_editable_start(input_line)
+        if line != input_line or col <= editable_start:
             return "break"
 
     def _on_delete(self, event):
-        # 光标不在最后一行，阻止删除
         line = int(self.txt_output.index("insert").split('.')[0])
-        last_line = int(self.txt_output.index("end-1c").split('.')[0])
-        if line != last_line:
+        if line != self._find_input_line():
             return "break"
 
+    def _on_history_up(self, event):
+        self._history_up()
+        return "break"
+
+    def _on_history_down(self, event):
+        self._history_down()
+        return "break"
+
+    def _on_tab(self, event):
+        self._tab_complete()
+        return "break"
+
     def on_key(self, event):
-        """主机本地行编辑：按键只改窗口内容，不发给 MCU。
-        回车时由 on_enter 整行发送，避免 MCU 逐字回显环回造成乱码。"""
+        """主机本地行编辑：按键只改窗口内容，不发给 MCU。"""
         if not self.serial_port or not self.serial_port.is_open:
             return "break"
 
-        if event.keysym == "Return":
+        if event.keysym in ("Return", "Up", "Down", "Tab"):
             return "break"
 
         if event.keysym == "BackSpace":
-            # 交给 _on_backspace 做本地删除，不发串口
             return None
 
-        if event.keysym in ("Up", "Down", "Left", "Right", "Home", "End", "Tab"):
-            # 本地光标移动；不发给 MCU
+        if event.keysym in ("Left", "Right", "Home", "End"):
             return None
 
         if event.keysym.lower() == "l" and (event.state & 0x4):  # Ctrl+L
@@ -351,15 +384,13 @@ class SerialMonitor(tk.Tk):
             return "break"
 
         if event.char and event.char.isprintable():
-            # 只允许在最后一行提示符之后插入
             line, col = map(int, self.txt_output.index("insert").split('.'))
-            last_line = int(self.txt_output.index("end-1c").split('.')[0])
-            if line != last_line:
-                self.txt_output.mark_set("insert", "end-1c")
-            editable_start = self._get_editable_start()
-            cur_col = int(self.txt_output.index("insert").split('.')[1])
-            if cur_col < editable_start:
-                self.txt_output.mark_set("insert", f"{last_line}.{editable_start}")
+            input_line = self._find_input_line()
+            editable_start = self._get_editable_start(input_line)
+            if line != input_line:
+                self._focus_input_line()
+            elif col < editable_start:
+                self.txt_output.mark_set("insert", f"{input_line}.{editable_start}")
             self.txt_output.insert("insert", event.char)
             return "break"
 
@@ -369,33 +400,146 @@ class SerialMonitor(tk.Tk):
         self.txt_output.delete('1.0', tk.END)
 
     def on_enter(self, event):
-        """整行发送命令 + \\r。MCU 不再依赖逐字输入。"""
+        """整行发送命令 + \\r。不在本地插换行，由 MCU 回显/提示符负责换行。"""
         if not self.serial_port or not self.serial_port.is_open:
             return "break"
 
-        line_start = self.txt_output.index("insert linestart")
-        line_end = self.txt_output.index("insert lineend")
-        line_text = self.txt_output.get(line_start, line_end)
+        line = self._find_input_line()
+        line_text = self.txt_output.get(f"{line}.0", f"{line}.end")
+        start_col = self._get_editable_start(line)
+        cmd = line_text[start_col:].strip()
 
-        for prefix in self.prompt_prefix_list:
-            if line_text.startswith(prefix):
-                line_text = line_text[len(prefix):]
-                break
-            elif prefix in line_text:
-                pos = line_text.rfind(prefix)
-                line_text = line_text[pos + len(prefix):]
-                break
-
-        line_text = line_text.strip()
-        self.txt_output.insert("end", "\n")
-        self.txt_output.see("end")
+        if cmd:
+            if not self.cmd_history or self.cmd_history[-1] != cmd:
+                self.cmd_history.append(cmd)
+            self.history_index = len(self.cmd_history)
+            self._pending_draft = ''
 
         try:
-            self.serial_port.write((line_text + '\r').encode('utf-8', errors='ignore'))
+            self.serial_port.write((cmd + '\r').encode('utf-8', errors='ignore'))
         except Exception as e:
             self.print_text(f"[错误] 发送失败: {e}\n", 'red')
 
         return "break"
+
+    def _get_edit_line(self):
+        """返回 (line_no, editable_start_col, current_text)"""
+        line = self._find_input_line()
+        full = self.txt_output.get(f"{line}.0", f"{line}.end")
+        start_col = self._get_editable_start(line)
+        return line, start_col, full[start_col:]
+
+    def _replace_edit(self, text):
+        """把当前输入行（提示符之后）整体替换为 text"""
+        line, start_col, _ = self._get_edit_line()
+        self.txt_output.delete(f"{line}.{start_col}", f"{line}.end")
+        if text:
+            self.txt_output.insert(f"{line}.{start_col}", text)
+        self.txt_output.mark_set("insert", f"{line}.{start_col + len(text)}")
+        self.txt_output.see("end")
+
+    def _history_up(self):
+        if not self.cmd_history:
+            return
+        self._focus_input_line()
+        _, _, cur = self._get_edit_line()
+        if self.history_index >= len(self.cmd_history):
+            self._pending_draft = cur
+            self.history_index = len(self.cmd_history) - 1
+        elif self.history_index > 0:
+            self.history_index -= 1
+        else:
+            return
+        self._replace_edit(self.cmd_history[self.history_index])
+
+    def _history_down(self):
+        if not self.cmd_history:
+            return
+        if self.history_index < len(self.cmd_history) - 1:
+            self.history_index += 1
+            self._replace_edit(self.cmd_history[self.history_index])
+        else:
+            self.history_index = len(self.cmd_history)
+            draft = self._pending_draft
+            self._pending_draft = ''
+            self._replace_edit(draft)
+
+    def _learn_commands_from_text(self, text):
+        """从串口 help 列表行解析命令名，例如 '    ping <ip> ...'"""
+        for cmd in HELP_CMD_RE.findall(text):
+            cmd = cmd.strip()
+            if cmd and not set(cmd) <= {'-'}:
+                self.shell_commands.add(cmd)
+
+    def _find_completions(self, cur):
+        """根据 help 学到的命令 + 历史记录做 Tab 补全"""
+        cur = cur.rstrip()
+        if ' ' in cur:
+            rest, prefix = cur.rsplit(' ', 1)
+            rest = rest.strip()
+        else:
+            rest, prefix = '', cur
+
+        pool = set(self.shell_commands)
+        pool.update(self.cmd_history)
+
+        matches = []
+        for cmd in pool:
+            if rest:
+                if not cmd.startswith(rest + ' '):
+                    continue
+                tail = cmd[len(rest) + 1:]
+                word = tail.split()[0] if tail else ''
+                if word.startswith(prefix):
+                    matches.append(f"{rest} {word}".strip())
+            else:
+                first = cmd.split()[0]
+                if first.startswith(prefix):
+                    matches.append(first)
+                elif cmd.startswith(prefix):
+                    matches.append(cmd)
+
+        return sorted(set(matches), key=lambda s: (len(s), s))
+
+    def _apply_tab(self, cur, set_text, show_candidates):
+        """通用 Tab 补全：set_text(新内容) / show_candidates(候选列表)"""
+        matches = self._find_completions(cur)
+        if not matches:
+            return
+        if len(matches) == 1:
+            set_text(matches[0] + ' ')
+            return
+        common = self._common_prefix(matches)
+        if common and len(common) > len(cur.rstrip()):
+            set_text(common)
+        else:
+            show_candidates(matches)
+
+    def _tab_complete(self):
+        self._focus_input_line()
+        line, start_col, cur = self._get_edit_line()
+
+        def set_text(text):
+            self._replace_edit(text)
+
+        def show_candidates(matches):
+            self.txt_output.insert(tk.END, '\n  ' + '  '.join(matches) + '\n')
+            prompt = self.txt_output.get(f"{line}.0", f"{line}.{start_col}")
+            self.txt_output.insert(tk.END, prompt + cur)
+            self.txt_output.mark_set("insert", tk.END)
+            self.txt_output.see("end")
+
+        self._apply_tab(cur, set_text, show_candidates)
+
+    @staticmethod
+    def _common_prefix(strs):
+        if not strs:
+            return ''
+        s = min(strs, key=len)
+        for i, ch in enumerate(s):
+            if any(st[i] != ch for st in strs):
+                return s[:i]
+        return s
 
     def create_widgets(self):
         style = ttk.Style(self)
@@ -493,11 +637,14 @@ class SerialMonitor(tk.Tk):
         self.ent_input = ttk.Entry(frm_input, font=("Consolas", 12))
         self.ent_input.pack(side='left', fill='x', expand=True)
         self.ent_input.bind('<Return>', self.send_command)
-        self.ent_input.bind("<Up>", self.history_up)
-        self.ent_input.bind("<Down>", self.history_down)
-        # 历史命令缓存
+        self.ent_input.bind("<Up>", self._ent_history_up)
+        self.ent_input.bind("<Down>", self._ent_history_down)
+        self.ent_input.bind("<Tab>", self._ent_tab)
         self.cmd_history = []
         self.history_index = -1
+        self._pending_draft = ''
+        self._ent_draft = ''
+        self.shell_commands = set()  # 从 help 输出 + 历史动态积累
 
         self.btn_send = ttk.Button(frm_input, text="发送", command=self.send_command)
         self.btn_send.pack(side='left', padx=6)
@@ -675,6 +822,7 @@ class SerialMonitor(tk.Tk):
         self.btn_stop.config(state='normal')
         tip = "（打开时复位：开）" if self.reset_on_open.get() else "（打开时复位：关，不关串口也能用「复位」抓启动日志）"
         self.print_text(f"[系统] 串口 {port} 已打开，波特率 {baud} {tip}\n", 'green')
+        self.txt_output.focus_set()
         #串口数据读取线程
         self.thread = threading.Thread(target=self.read_from_port, daemon=True)
         self.thread.start()
@@ -829,6 +977,7 @@ class SerialMonitor(tk.Tk):
             return
         if timestamp:
             text = timestamp + text
+        self._learn_commands_from_text(text)
         self.insert_ansi(text)
 
     def insert_ansi(self, text):
@@ -837,12 +986,18 @@ class SerialMonitor(tk.Tk):
 
         # 统一同包内的 CRLF（必须在按 \\r 清行之前做，否则 \\r\\n 会被拆成清行+换行）
         text = text.replace('\r\r\n', '\n').replace('\r\n', '\n')
-        # 折叠多余 \\r（固件若把 \\n 再转成 \\r\\n，跨包时可能只剩连续 \\r）
         text = re.sub(r'\r+', '\r', text)
 
-        # 上一包末尾悬空的 \\r：若本包以 \\n 开头则只是换行；
-        # 若仍是 \\r 则继续挂起（切勿清行，否则会把已输出的提示符拆成 STM3/STM32F 多行）；
-        # 否则清行后覆盖（boot 倒计时）。
+        # 提示符前多余空行折叠（命令输出末尾 \\n + 提示符前缀 \\r\\n）
+        for prefix in self.prompt_prefix_list:
+            text = re.sub(r'\n+(?=' + re.escape(prefix) + r')', '\n', text)
+        # 连续重复提示符（旧固件双提示符）折叠为一行
+        for prefix in self.prompt_prefix_list:
+            text = re.sub(
+                re.escape(prefix) + r'(?:\n' + re.escape(prefix) + r')+',
+                prefix, text)
+
+        # 上一包末尾悬空的 \\r
         if self._pending_cr:
             self._pending_cr = False
             if text.startswith('\n'):
@@ -894,6 +1049,9 @@ class SerialMonitor(tk.Tk):
 
         self._current_ansi_tag = tag
         self.txt_output.see(tk.END)
+        # MCU 打出新提示符后，若光标不在输入区，才跳到输入行末尾
+        if any(p in text for p in self.prompt_prefix_list):
+            self.after_idle(self._maybe_focus_input_line)
 
     def _insert_chunk(self, chunk, tag):
         pos = 0
@@ -938,36 +1096,59 @@ class SerialMonitor(tk.Tk):
     def send_command(self, event=None):
         if not self.serial_port or not self.serial_port.is_open:
             messagebox.showwarning("提示", "串口未打开")
-            return
+            return "break"
         cmd = self.ent_input.get().strip()
-        if not cmd:
-            return
         try:
-            # 只发 \r；\r\n 会让 MCU CLI 多处理一次空行
             self.serial_port.write((cmd + '\r').encode())
-            # 保存到历史
-            self.cmd_history.append(cmd)
-            self.history_index = len(self.cmd_history)  # 重置到最新位置
-            #self.print_text(f"[TX] {cmd}\n", 'blue')
+            if cmd:
+                if not self.cmd_history or self.cmd_history[-1] != cmd:
+                    self.cmd_history.append(cmd)
+                self.history_index = len(self.cmd_history)
+                self._ent_draft = ''
             self.ent_input.delete(0, tk.END)
         except Exception as e:
             self.print_text(f"[错误] 发送失败: {e}\n", 'red')
+        return "break"
 
-    def history_up(self, event=None):
-        if self.cmd_history and self.history_index > 0:
+    def _ent_history_up(self, event=None):
+        if not self.cmd_history:
+            return "break"
+        if self.history_index >= len(self.cmd_history):
+            self._ent_draft = self.ent_input.get()
+            self.history_index = len(self.cmd_history) - 1
+        elif self.history_index > 0:
             self.history_index -= 1
-            self.ent_input.delete(0, tk.END)
-            self.ent_input.insert(0, self.cmd_history[self.history_index])
+        else:
+            return "break"
+        self.ent_input.delete(0, tk.END)
+        self.ent_input.insert(0, self.cmd_history[self.history_index])
+        return "break"
 
-    def history_down(self, event=None):
-        if self.cmd_history and self.history_index < len(self.cmd_history) - 1:
+    def _ent_history_down(self, event=None):
+        if not self.cmd_history:
+            return "break"
+        if self.history_index < len(self.cmd_history) - 1:
             self.history_index += 1
             self.ent_input.delete(0, tk.END)
             self.ent_input.insert(0, self.cmd_history[self.history_index])
         else:
-            # 已经到最新一条后，清空输入框
             self.history_index = len(self.cmd_history)
             self.ent_input.delete(0, tk.END)
+            self.ent_input.insert(0, self._ent_draft)
+        return "break"
+
+    def _ent_tab(self, event=None):
+        cur = self.ent_input.get()
+
+        def set_text(text):
+            self.ent_input.delete(0, tk.END)
+            self.ent_input.insert(0, text)
+
+        def show_candidates(matches):
+            self.print_text('  ' + '  '.join(matches) + '\n', 'cyan')
+
+        self._apply_tab(cur, set_text, show_candidates)
+        return "break"
 
     def print_text(self, text, tag='reset'):
         self.txt_output.insert(tk.END, text, tag)

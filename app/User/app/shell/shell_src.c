@@ -501,7 +501,6 @@ static void shell_parse(cmd_root_t * cmdroot , struct shell_input * shellin)
 		}
 		else {
 			cmdmatch->func(shellin->cmdline);
-			printk("%s", SHELL_PROMPT);
 		}
 	}
 	else {

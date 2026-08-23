@@ -33,7 +33,7 @@
 #include "cJSON.h"
 /*stm32  基于SRAM实现的 malloc added by liudayi */
 #include "malloc.h"
-#include "FreeRTOS.h"
+#include "os_task.h"
 
 static const char *ep;
 
@@ -47,8 +47,8 @@ static int cJSON_strcasecmp(const char *s1,const char *s2)
 }
 
 /* 必须用 FreeRTOS 堆：newlib malloc 未正确接入时一用 cJSON 就 HardFault，网页表现为无响应 */
-static void *(*cJSON_malloc)(size_t sz) = pvPortMalloc;
-static void (*cJSON_free)(void *ptr) = vPortFree;
+static void *(*cJSON_malloc)(size_t sz) = os_mem_alloc;
+static void (*cJSON_free)(void *ptr) = os_mem_free;
 
 static char* cJSON_strdup(const char* str)
 {
@@ -64,13 +64,13 @@ static char* cJSON_strdup(const char* str)
 void cJSON_InitHooks(cJSON_Hooks* hooks)
 {
     if (!hooks) { /* Reset hooks */
-        cJSON_malloc = pvPortMalloc;
-        cJSON_free = vPortFree;
+        cJSON_malloc = os_mem_alloc;
+        cJSON_free = os_mem_free;
         return;
     }
 
-	cJSON_malloc = (hooks->malloc_fn)?hooks->malloc_fn:pvPortMalloc;
-	cJSON_free	 = (hooks->free_fn)?hooks->free_fn:vPortFree;
+	cJSON_malloc = (hooks->malloc_fn)?hooks->malloc_fn:os_mem_alloc;
+	cJSON_free	 = (hooks->free_fn)?hooks->free_fn:os_mem_free;
 }
 
 /* Internal constructor. */

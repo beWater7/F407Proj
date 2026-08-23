@@ -13,10 +13,8 @@
 #include <string.h>
 #include "devConfig.h"
 #include "safe_utils.h"
-#include "lwip/sys.h"
 #include "upgrade.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "os_task.h"
 #include "os_mutex.h"
 
 //DEVINFO_PARAM_T g_stDevParam = {0};
@@ -374,9 +372,8 @@ int devCfg_init()
 
     /* 启动 shell cmd 任务；OTA 时可挂起腾出调度/少量堆压力 */
     {
-        TaskHandle_t h;
-        h = (TaskHandle_t)sys_thread_new("devParamMng_task",
-                                        devParam_Mng_task, NULL, 512, 3);
+        os_task_handle h;
+        h = os_task_spawn("devParamMng_task", devParam_Mng_task, NULL, 512, 3);
         ota_register_background_task(h);
     }
 
@@ -419,6 +416,15 @@ int devPara_init()
 
     waitDevCfgModuleInit = TRUE;
 
+    /* 恢复的 byDebugLevel 必须合法，否则 log_level_str[level] 越界读代码区乱码 */
+    if (g_pstDevParam->stDevParam.byDebugLevel > DLEVEL_TRACE) {
+        DEVCFG_DEBUG(DEVCFG_WARN"byDebugLevel=%u invalid, fallback to DLEVEL_REPORT\n",
+                     g_pstDevParam->stDevParam.byDebugLevel);
+        g_pstDevParam->stDevParam.byDebugLevel = DLEVEL_REPORT;
+        g_stDevParamMng.bySave = 1;   /* 回写修正 */
+    }
+    /* DEBUG: 临时插桩，记录开机恢复的 byDebugLevel（验证后移除） */
+    os_printf("\r\n[DBG] boot byDebugLevel=%u\r\n", (unsigned)g_pstDevParam->stDevParam.byDebugLevel);
     setDebugLevel(g_pstDevParam->stDevParam.byDebugLevel);
 
     /* 堆重叠时 JSON 会被写进 wifi 字段并落盘；开机丢掉脏数据并回写 */

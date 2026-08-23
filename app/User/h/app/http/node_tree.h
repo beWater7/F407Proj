@@ -2,6 +2,7 @@
 #define __NODE_TREE_H__
 
 #include "os_debug.h"
+#include "os_task.h"
 
 
 #define METHOD_GET  (1u << 0)
@@ -81,7 +82,8 @@ extern node_t root_node[];
 process getProcess(node_t *node, char *path, node_t **targetNode);
 int processProtocol(void *conn, char *url);
 void sendCallback(void *conn, char *resp, HTTP_CODE code);
-void sys_reboot_delay(uint32_t sec);
+void os_reboot_delay_sec(uint32_t sec);
+#define sys_reboot_delay(sec) os_reboot_delay_sec(sec)
 
 #endif /* __NODE_TREE_H__ */
 

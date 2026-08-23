@@ -45,8 +45,7 @@
 #include "os_debug.h"
 #include "flash_manage.h"
 #include "upgrade.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "os_task.h"
 
 uint8_t byUseBinary;
 
@@ -244,7 +243,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
         {
             os_debug("malloc failed! need=%lu free=%u\n",
                      (unsigned long)need,
-                     (unsigned)xPortGetFreeHeapSize());
+                     (unsigned)os_heap_free());
             return 0;
         }
         memset(ReadBuffer, 0, need);

@@ -9,11 +9,11 @@
 	????
 ************************************************/
 #include "shell_control.h"
-#include "lwip/netif.h"
-#include "lwip/ip.h"
+#include "net_api.h"
 #include "safe_utils.h"
 #include "devConfig.h"
 #include "os_mutex.h"
+#include "os_task.h"
 #include "ping.h"
 #include "flash_manage.h"
 #include "dev_manage.h"
@@ -284,8 +284,6 @@ static void really_set_GPIO(void * arg)
 
 
 /* command added by liu */
-extern struct netif gnetif;
-//extern uint8_t g_byDHCPEnabled;
 
 static void sys_reboot_now(void *arg)
 {
@@ -298,49 +296,48 @@ static void sys_reboot_now(void *arg)
 static void sys_ifconfig(void *arg)
 {
     char* argv[4] = {0};
-    ip_addr_t ipaddr = gnetif.ip_addr;
-    ip_addr_t netmask = gnetif.netmask;
-    ip_addr_t gw = gnetif.gw;
+    net_ipv4_t ip;
+    net_ipv4_t mask;
+    net_ipv4_t gw;
+    char ipbuf[16];
+    uint8_t mac[6];
 
     int argc = cmdline_strtok((char*)arg,argv,4);
+    net_get_ip(&ip, &mask, &gw);
 
-    if(argc < 3)
+    if(argc >= 3)
     {
-        goto end;
+        if(strcmp(argv[1] ,"ip") == 0)
+        {
+            net_parse_ipv4(argv[2], &ip);
+        }
+        else if(strcmp(argv[1] ,"gw") == 0)
+        {
+            net_parse_ipv4(argv[2], &gw);
+        }
+        else if(strcmp(argv[1] ,"mask") == 0)
+        {
+            net_parse_ipv4(argv[2], &mask);
+        }
+        net_set_ip(&ip, &mask, &gw);
     }
 
-    if(strcmp(argv[1] ,"ip") == 0)
-    {
-        ipaddr_aton(argv[2], &ipaddr);
-    }
-    else if(strcmp(argv[1] ,"gw") == 0)
-    {
-        ipaddr_aton(argv[2], &gw);
-    }
-    else if(strcmp(argv[1] ,"mask") == 0)
-    {
-        ipaddr_aton(argv[2], &netmask);
-    }
-    netif_set_addr(&gnetif, &ipaddr, &netmask, &gw);
-
-end:
-    /* ?????????????? */
+    net_get_mac(mac);
     printk("eth0 MAC Address: %02x:%02x:%02x:%02x:%02x:%02x\n",
-           gnetif.hwaddr[0], gnetif.hwaddr[1], gnetif.hwaddr[2],
-           gnetif.hwaddr[3], gnetif.hwaddr[4], gnetif.hwaddr[5]);
+           mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
 
-    printk("IP: %d.%d.%d.%d\n",(uint8_t)(gnetif.ip_addr.addr),(uint8_t)(gnetif.ip_addr.addr >> 8), \
-    				   (uint8_t)(gnetif.ip_addr.addr >> 16),(uint8_t)(gnetif.ip_addr.addr >> 24));
-    printk("NETMASK: %d.%d.%d.%d\n",(uint8_t)(gnetif.netmask.addr),(uint8_t)(gnetif.netmask.addr >> 8), \
-    				   (uint8_t)(gnetif.netmask.addr >> 16),(uint8_t)(gnetif.netmask.addr >> 24));
-    printk("Gateway: %d.%d.%d.%d\n",(uint8_t)(gnetif.gw.addr),(uint8_t)(gnetif.gw.addr >> 8), \
-    			           (uint8_t)(gnetif.gw.addr >> 16),(uint8_t)(gnetif.gw.addr >> 24));
+    net_ipv4_to_str(&ip, ipbuf, sizeof(ipbuf));
+    printk("IP: %s\n", ipbuf);
+    net_ipv4_to_str(&mask, ipbuf, sizeof(ipbuf));
+    printk("NETMASK: %s\n", ipbuf);
+    net_ipv4_to_str(&gw, ipbuf, sizeof(ipbuf));
+    printk("Gateway: %s\n", ipbuf);
     {
         extern __IO uint32_t EthStatus;
         uint16_t bsr = ETH_ReadPHYRegister(ETHERNET_PHY_ADDRESS, PHY_BSR);
         printk("flags: up=%d link=%d EthStatus=0x%lx PHY_BSR=0x%04x\n",
-               netif_is_up(&gnetif) ? 1 : 0,
-               netif_is_link_up(&gnetif) ? 1 : 0,
+               net_is_up(),
+               net_is_link_up(),
                (unsigned long)EthStatus,
                (unsigned)bsr);
     }
@@ -412,6 +409,24 @@ static void debugLevelShell(void *arg)
         printk("err level\n");
     }
 end:
+	/* DEBUG: 临时插桩，诊断 log_level_str 指针/字节与 __printf_level__（验证后移除） */
+	{
+		const char *dbg_p;
+		int dbg_i, dbg_j;
+		printk("\r\n[DBG] lvl=%u arr=%p", (unsigned)__printf_level__, (const void *)log_level_str);
+		for (dbg_i = 0; dbg_i < DLEVEL_MAX; dbg_i++) {
+			dbg_p = log_level_str[dbg_i];
+			printk("\r\n[DBG] [%d]=%p", dbg_i, (const void *)dbg_p);
+			if (dbg_p) {
+				printk(" bytes");
+				for (dbg_j = 0; dbg_j < 8; dbg_j++)
+					printk(" %02X", (unsigned char)dbg_p[dbg_j]);
+			} else {
+				printk(" NULL");
+			}
+		}
+		printk("\r\n");
+	}
 	/*  debug level info */
 	byLevel = DLEVEL_ALERT;
 	for(; byLevel < DLEVEL_MAX; byLevel++)
@@ -467,48 +482,7 @@ static void uptime(void *arg)
 
 uint8_t getCpuUsage(void)
 {
-    TaskStatus_t *taskStatusArray;
-    UBaseType_t numTasks;
-    uint32_t totalRunTime = 0;
-    uint32_t idleRunTime = 0;
-    uint32_t idlePercent = 0;
-    TaskHandle_t idleHandle;
-
-    numTasks = uxTaskGetNumberOfTasks();
-    if (numTasks == 0) {
-        return 0;
-    }
-    taskStatusArray = pvPortMalloc(numTasks * sizeof(TaskStatus_t));
-    if (taskStatusArray == NULL) {
-        return 0;
-    }
-
-    numTasks = uxTaskGetSystemState(taskStatusArray, numTasks, &totalRunTime);
-    if (totalRunTime < 100U) {
-        vPortFree(taskStatusArray);
-        return 0;
-    }
-
-    idleHandle = xTaskGetIdleTaskHandle();
-    for (UBaseType_t i = 0; i < numTasks; i++) {
-        if (idleHandle != NULL) {
-            if (taskStatusArray[i].xHandle == idleHandle) {
-                idleRunTime = taskStatusArray[i].ulRunTimeCounter;
-                break;
-            }
-        } else if (taskStatusArray[i].pcTaskName != NULL &&
-                   strncmp(taskStatusArray[i].pcTaskName, "IDLE", 4) == 0) {
-            idleRunTime = taskStatusArray[i].ulRunTimeCounter;
-            break;
-        }
-    }
-    vPortFree(taskStatusArray);
-
-    idlePercent = idleRunTime / (totalRunTime / 100U);
-    if (idlePercent > 100U) {
-        idlePercent = 100U;
-    }
-    return (uint8_t)(100U - idlePercent);
+    return os_cpu_usage();
 }
 
 
@@ -524,7 +498,7 @@ void PrintRunTimeStats(void *arg)
 	   return;
     }
     memset(buffer, 0, 1024);
-    vTaskGetRunTimeStats(buffer);
+    os_task_runtime_stats(buffer, 1024);
     printk("%s\r\n", buffer);
     os_free(buffer);
 	printk("%s", SHELL_PROMPT);
@@ -535,13 +509,13 @@ void PrintRunTimeStats(void *arg)
 void CheckHeapUsage(void *arg) 
 {
     /* ���ص�ǰ���õĶ��ڴ��С */
-    size_t freeHeap = xPortGetFreeHeapSize();
+    size_t freeHeap = os_heap_free();
     /* ������ϵͳ����������С�Ŀ��ж��ڴ��С */
-    size_t minFreeHeap = xPortGetMinimumEverFreeHeapSize();
+    size_t minFreeHeap = os_heap_min_free();
     UNUSED_ARG(arg);
 
-    printk("Current free heap size: %u bytes\n", freeHeap);
-    printk("Minimum free heap size ever: %u bytes\n", minFreeHeap);
+    printk("Current free heap size: %u bytes\n", (unsigned)freeHeap);
+    printk("Minimum free heap size ever: %u bytes\n", (unsigned)minFreeHeap);
 	printk("%s", SHELL_PROMPT);
 	return;
 }
@@ -549,15 +523,7 @@ void CheckHeapUsage(void *arg)
 
 uint8_t getMemUsage(void)
 {
-	size_t freeHeap = 0;
-	uint32_t memUsage = 0;
-
-	freeHeap = xPortGetFreeHeapSize();
-	freeHeap *= 100;
-	memUsage = freeHeap / (configTOTAL_HEAP_SIZE);
-
-	//printk("memUsage:%d\r\n", memUsage);
-    return (100 - memUsage);
+    return os_heap_usage_percent();
 }
 
 
@@ -572,18 +538,18 @@ void CheckTaskStackUsage(void *arg)
 {
 	uint8_t i = 0;
     UBaseType_t stackHighWaterMark = 0;
-    TaskHandle_t taskHandle = NULL;
+    os_task_handle taskHandle = NULL;
 
     UNUSED_ARG(arg);
 
     for(i = 0; i < 32; i++)
 	{
-		taskHandle = sys_handle_info.sys_handle_array[i];
+		taskHandle = (os_task_handle)sys_handle_info.sys_handle_array[i];
 		if(taskHandle)
 		{
 			/* �ú�������ָ���������С��ջ��������Ϊ "High Water Mark"�����ֵԽС��˵������ʹ����Խ��Ķ�ջ */
-    		stackHighWaterMark = uxTaskGetStackHighWaterMark(taskHandle);
-			printk("%-32s stack high water mark: %u\r\n", pcTaskGetName(taskHandle), stackHighWaterMark);
+    		stackHighWaterMark = os_task_stack_free(taskHandle);
+			printk("%-32s stack high water mark: %u\r\n", os_task_name(taskHandle), stackHighWaterMark);
 		}
 	}
 	return;
@@ -814,7 +780,7 @@ static void sys_weather(void *arg)
 /* 获取某个任务的栈使用情况 */
 void CheckTaskStackUsage(uint8_t* param, void *arg) {
     UBaseType_t stackHighWaterMark = 0;
-    TaskHandle_t taskHandle = NULL;
+    os_task_handle taskHandle = NULL;
 
     UNUSED_ARG(arg);
     
@@ -829,9 +795,9 @@ void CheckTaskStackUsage(uint8_t* param, void *arg) {
 
 void CheckHeapUsage(uint8_t* param, void *arg) {
     /* ���ص�ǰ���õĶ��ڴ��С */
-    size_t freeHeap = xPortGetFreeHeapSize();
+    size_t freeHeap = os_heap_free();
     /* ������ϵͳ����������С�Ŀ��ж��ڴ��С */
-    size_t minFreeHeap = xPortGetMinimumEverFreeHeapSize();
+    size_t minFreeHeap = os_heap_min_free();
     UNUSED_ARG(arg);
 
     OS_SHELL_PRINTF(param,"Current free heap size: %u bytes\n", freeHeap);

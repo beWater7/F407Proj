@@ -15,6 +15,7 @@
 #define __OS_MUTEX_H__
 
 #include "systemConfig.h"
+#include "os_types.h"
 
 #if defined(USE_FREERTOS)
 #include "FreeRTOS.h"
@@ -95,7 +96,7 @@ typedef os_mutex_t os_mutex;
 #define TASK_PRIORITY_REALTIME        6
 #define TASK_PRIORITY_MAX             7   /* 最高优先级 */
 
-typedef xTaskHandle os_task_handle;
+/* os_task_handle 定义见 os_types.h */
 
 #elif defined(USE_RTTHREAD) // 裸机，无需锁
 #include "rtthread.h"

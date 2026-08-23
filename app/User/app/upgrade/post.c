@@ -14,8 +14,7 @@
 #include "flash_manage.h"
 #include "log.h"
 #include "node_tree.h"
-#include "FreeRTOS.h"
-#include "task.h"
+#include "os_task.h"
 #include "crc.h"
 #include "malloc.h"
 
@@ -25,7 +24,7 @@ char *gs_byUserFile = NULL;
 static char *gs_byUserFileBase = NULL;
 
 #define OTA_BG_TASK_MAX 8
-static TaskHandle_t s_ota_bg_tasks[OTA_BG_TASK_MAX];
+static os_task_handle s_ota_bg_tasks[OTA_BG_TASK_MAX];
 static uint8_t s_ota_bg_n;
 static uint8_t s_ota_heap_busy;
 
@@ -44,7 +43,7 @@ void upgrade_buf_release(void)
 
 void ota_register_background_task(void *task_handle)
 {
-    TaskHandle_t h = (TaskHandle_t)task_handle;
+    os_task_handle h = (os_task_handle)task_handle;
     if (h == NULL || s_ota_bg_n >= OTA_BG_TASK_MAX) {
         return;
     }
@@ -65,14 +64,14 @@ void ota_prepare_heap(void *keep_http_state)
     uint32_t before;
     uint32_t after;
     uint8_t i;
-    TaskHandle_t telnet;
+    os_task_handle telnet;
 
     /* URI 解析与首包各会调一次；已腾过则跳过，避免日志像“升了两次” */
     if (s_ota_heap_busy) {
         return;
     }
 
-    before = xPortGetFreeHeapSize();
+    before = (uint32_t)os_heap_free();
 
     upgrade_buf_release();
     s_ota_heap_busy = 1;
@@ -82,17 +81,16 @@ void ota_prepare_heap(void *keep_http_state)
 
     for (i = 0; i < s_ota_bg_n; i++) {
         if (s_ota_bg_tasks[i] != NULL) {
-            vTaskSuspend(s_ota_bg_tasks[i]);
+            os_task_suspend(s_ota_bg_tasks[i]);
         }
     }
 
-    /* Telnet 会话任务按需创建，用名字兜底挂起 */
-    telnet = xTaskGetHandle("TelnetSession");
+    telnet = os_task_find_by_name("TelnetSession");
     if (telnet != NULL) {
-        vTaskSuspend(telnet);
+        os_task_suspend(telnet);
     }
 
-    after = xPortGetFreeHeapSize();
+    after = (uint32_t)os_heap_free();
     os_printf(KERN_WARN"OTA prepare heap: free %lu -> %lu (+%ld)\r\n",
               (unsigned long)before,
               (unsigned long)after,
@@ -103,7 +101,7 @@ void ota_prepare_heap(void *keep_http_state)
 void ota_finish_heap_prepare(void)
 {
     uint8_t i;
-    TaskHandle_t telnet;
+    os_task_handle telnet;
 
     if (!s_ota_heap_busy) {
         return;
@@ -111,12 +109,12 @@ void ota_finish_heap_prepare(void)
     s_ota_heap_busy = 0;
     for (i = 0; i < s_ota_bg_n; i++) {
         if (s_ota_bg_tasks[i] != NULL) {
-            vTaskResume(s_ota_bg_tasks[i]);
+            os_task_resume(s_ota_bg_tasks[i]);
         }
     }
-    telnet = xTaskGetHandle("TelnetSession");
+    telnet = os_task_find_by_name("TelnetSession");
     if (telnet != NULL) {
-        vTaskResume(telnet);
+        os_task_resume(telnet);
     }
 }
 
@@ -231,7 +229,7 @@ uint8_t web_upgrade(void *conn, char *webFile, int len)
             {
                 os_debug("gs_byUserFile os_malloc failed (need %lu free=%u)!\r\n",
                          (unsigned long)(hs->pkt_len + CRCCHECKSUMLEN),
-                         (unsigned)xPortGetFreeHeapSize());
+                         (unsigned)os_heap_free());
                 ota_abort_heap_prepare();
                 return ERR_MEM;
             }
@@ -895,7 +893,7 @@ uint8_t fw_upgrade(void *conn, char *webFile, int len)
         if (NULL == gs_byUserFile) {
             os_debug("gs_byUserFile os_malloc failed! need=%lu free=%u\r\n",
                      (unsigned long)(hs->pkt_len ? hs->pkt_len : 1),
-                     (unsigned)xPortGetFreeHeapSize());
+                     (unsigned)os_heap_free());
 #if OTA_STREAM_FALLBACK
             {
                 uint32_t magic = 0;
