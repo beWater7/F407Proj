@@ -1,14 +1,13 @@
-#include "stm32f4xx.h"
+#include "os_debug.h"
+#include "os_mutex.h"
+#include "malloc.h"
+#include "hal_uart.h"
+#include "ustdio.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>
 #include <stdlib.h>
 #include <stdarg.h>
-#include "os_debug.h"
-#include "os_mutex.h"
-#include "malloc.h"
-#include "bsp_usart.h"
-#include "ustdio.h"
 
 
 #if USE_CUSTOM_PRINTK
@@ -233,29 +232,34 @@ NEXT:
 
     __print_buf_len__ = byBuffLen;
 
+    os_print_buf_flush();
+
+    return;
+}
+
+/* 把 __print_buf__[0..__print_buf_len__) 发往 telnet hook 与 UART。
+ * os_printf_api / os_log(模块化打印)共用：
+ *  - 先回调 telnet 客户端(如有)
+ *  - 再 UART 直写(绕过 newlib 行缓冲，提示符不会卡在 stdout)
+ *  - 最后 flush 等串口发完，避免与其它任务打印交错成乱码 */
+void os_print_buf_flush(void)
+{
+    uint8 byBuffLen = __print_buf_len__;
+
     /* 回调函数, 发送打印内容到客户端如telnet客户端 */
-    if(__print_hook)
-    {
-#if DEBUGBUFFWITHCOLOR
+    if (__print_hook) {
         __print_hook((uint8 *)__print_buf__, byBuffLen);
-#else
-        __print_hook((uint8 *)__color_output__[byPrintLevel], strlen(__color_output__[byPrintLevel]));
-        __print_hook((uint8 *)__print_buf__, byBuffLen);
-        __print_hook((uint8 *)__color_output__[6], strlen(__color_output__[6]));
-#endif
-     }
+    }
 
     /* 直接写 USART，禁止再走 printf：
      * newlib 行缓冲会把 "\nSTM32F407 >" 里提示符卡在 stdout，
      * 与其它任务打印交错后，serialTerm 里就变成 STM3 / STM32F / 07 > */
     if (byBuffLen > 0) {
-        usart_api_write((uint8_t *)__print_buf__, byBuffLen);
+        hal_uart_write((uint8_t *)__print_buf__, byBuffLen);
     }
 
     /* 等待串口传输完成, 避免乱码 */
-    waitUsartSend(DEBUG_USART);
-
-    return;
+    hal_uart_flush();
 }
 
 
@@ -413,7 +417,7 @@ NEXT:
         debug_printf("%s", byTmpBuff);
     }
 
-    waitUsartSend(DEBUG_USART);
+    hal_uart_flush();
 
 EXIT:
     free(byTmpBuff);

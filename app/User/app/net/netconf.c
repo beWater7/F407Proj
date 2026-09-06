@@ -36,9 +36,11 @@
 #include "lwip/dhcp.h"
 #include "ethernetif.h"
 #include "netconf.h"
+#include "os_log.h"
 #include <stdio.h>
-#include "stm32f4x7_phy.h"
-#include "netif/ethernet.h" //¥¶¿Ì“‘Ã´Õ¯ethernet_input added by ldy
+#include "hal_eth.h"
+#include "hal_led.h"
+#include "netif/ethernet.h" //?????????ethernet_input added by ldy
 #include "lwip/netif.h"
 #include "lwip/tcpip.h"
 
@@ -56,25 +58,23 @@ uint32_t LinkTimer = 0;
 uint32_t IPaddress = 0;
 
 #ifdef USE_DHCP
-#include "bsp_led.h"
 uint32_t DHCPfineTimer = 0;
 uint32_t DHCPcoarseTimer = 0;
-__IO uint8_t DHCP_state;
+volatile uint8_t DHCP_state;
 #endif
-extern __IO uint32_t  EthStatus;
 
 
 /* Private functions ---------------------------------------------------------*/
 void LwIP_DHCP_Process_Handle(void);
 /**
-* @brief  Initializes the lwIP stack for Ë£∏Ê?∫
+* @brief  Initializes the lwIP stack for ????
 * @param  None
 * @retval None
 */
 void LwIP_Init(void)
 {
-  /* LWIP 2.1.2 È??Ë¶ÅÂê?Ê?∂Ê??Âº?LWIP_IPV4Â??LWIP_IPV6‰∏§‰∏™ÂÆè,  
-   * LWIPÂèØ‰ª•Ê?ØÊ?ÅÂè?Ê†?Ôº?ÂØπipv4 Â?? ipv6Â??Â?´Â§?Áê?Ë??‰∏ç‰º?Â?≤Á™Å 
+  /* LWIP 2.1.2 ??????????????LWIP_IPV4???LWIP_IPV6???,  
+   * LWIP???????????????ipv4 ??? ipv6???????????????????? 
    */
   ip_addr_t ipaddr;
   ip_addr_t netmask;
@@ -123,7 +123,7 @@ void LwIP_Init(void)
   /*  Registers the default network interface.*/
   netif_set_default(&gnetif);
 
-  if (EthStatus == (ETH_INIT_FLAG | ETH_LINK_FLAG))
+  if (hal_eth_get_status() == (HAL_ETH_INIT_FLAG | HAL_ETH_LINK_FLAG))
   { 
     /* Set Ethernet link flag */
     gnetif.flags |= NETIF_FLAG_LINK_UP;
@@ -133,12 +133,7 @@ void LwIP_Init(void)
 #ifdef USE_DHCP
     DHCP_state = DHCP_START;
 #else
-#ifdef SERIAL_DEBUG
-		printf("\n  Static IP address   \n");
-		printf("IP: %d.%d.%d.%d\n",IP_ADDR0,IP_ADDR1,IP_ADDR2,IP_ADDR3);
-		printf("NETMASK: %d.%d.%d.%d\n",NETMASK_ADDR0,NETMASK_ADDR1,NETMASK_ADDR2,NETMASK_ADDR3);
-		printf("Gateway: %d.%d.%d.%d\n",GW_ADDR0,GW_ADDR1,GW_ADDR2,GW_ADDR3);
-#endif /* SERIAL_DEBUG */
+    LOGR(LOG_MOD_NET, "static IP %d.%d.%d.%d\r\n", IP_ADDR0, IP_ADDR1, IP_ADDR2, IP_ADDR3);
 #endif /* USE_DHCP */
   }
   else
@@ -148,28 +143,25 @@ void LwIP_Init(void)
 #ifdef USE_DHCP
     DHCP_state = DHCP_LINK_DOWN;
 #endif /* USE_DHCP */
-#ifdef SERIAL_DEBUG
-		printf("\n  Network Cable is  \n");
-		printf("    not connected   \n");
-#endif /* SERIAL_DEBUG */
+    LOGR(LOG_MOD_NET, "cable not connected\r\n");
   }
 
 #if LWIP_NETIF_LINK_CALLBACK
   /* Set the link callback function, this function is called on change of link status*/
-  netif_set_link_callback(&gnetif, ETH_link_callback);
+  netif_set_link_callback(&gnetif, (netif_status_callback_fn)hal_eth_on_link);
 #endif
 }
 
 
 /**
-* @brief  ‰∏∫Â∏¶Ê?ç‰Ω?Á≥ªÁª?Â??Â§?Á??lwip netifÂ?ùÂß?Â??
+* @brief  ??????????????????lwip netif????????
 * @param  None
 * @retval None
 */
 void lwip_netif_init(void)
 {
- /* LWIP 2.1.2 È??Ë¶ÅÂê?Ê?∂Ê??Âº?LWIP_IPV4Â??LWIP_IPV6‰∏§‰∏™ÂÆè,  
-  * LWIPÂèØ‰ª•Ê?ØÊ?ÅÂè?Ê†?Ôº?ÂØπipv4 Â?? ipv6Â??Â?´Â§?Áê?Ë??‰∏ç‰º?Â?≤Á™Å 
+ /* LWIP 2.1.2 ??????????????LWIP_IPV4???LWIP_IPV6???,  
+  * LWIP???????????????ipv4 ??? ipv6???????????????????? 
   */
   ip_addr_t ipaddr;
   ip_addr_t netmask;
@@ -209,18 +201,18 @@ void lwip_netif_init(void)
   //netif_add(&gnetif, &ipaddr.u_addr.ip4, &netmask.u_addr.ip4, &gw.u_addr.ip4, NULL, &ethernetif_init, &ethernet_input);
   //netif_add(&gnetif, &ipaddr, &netmask, &gw, NULL, &ethernetif_init, &ethernet_input);
 
-  /* Ê?∞ÊçÆÊ?•Ê?∂Â??Ë∞?‰∏∫tcpip_input */
+  /* ????????????????tcpip_input */
   netif_add(&gnetif, &ipaddr, &netmask, &gw, NULL, &ethernetif_init, &tcpip_input);
 
 
   /*  Registers the default network interface.*/
   netif_set_default(&gnetif);
 
-  printf("EthStatus=0x%lx (need INIT|LINK=0x11)\n", (unsigned long)EthStatus);
+  printf("EthStatus=0x%lx (need INIT|LINK=0x11)\n", (unsigned long)hal_eth_get_status());
 
-  if (EthStatus & ETH_INIT_FLAG)
+  if (hal_eth_get_status() & HAL_ETH_INIT_FLAG)
   {
-    if (EthStatus & ETH_LINK_FLAG)
+    if (hal_eth_get_status() & HAL_ETH_LINK_FLAG)
     {
       /* Set Ethernet link flag */
       gnetif.flags |= NETIF_FLAG_LINK_UP;
@@ -230,12 +222,6 @@ void lwip_netif_init(void)
 #ifdef USE_DHCP
       DHCP_state = DHCP_START;
 #endif
-#ifdef SERIAL_DEBUG
-      printf("\n  Static IP address   \n");
-      printf("IP: %d.%d.%d.%d\n",IP_ADDR0,IP_ADDR1,IP_ADDR2,IP_ADDR3);
-      printf("NETMASK: %d.%d.%d.%d\n",NETMASK_ADDR0,NETMASK_ADDR1,NETMASK_ADDR2,NETMASK_ADDR3);
-      printf("Gateway: %d.%d.%d.%d\n",GW_ADDR0,GW_ADDR1,GW_ADDR2,GW_ADDR3);
-#endif /* SERIAL_DEBUG */
     }
     else
     {
@@ -244,23 +230,18 @@ void lwip_netif_init(void)
 #ifdef USE_DHCP
       DHCP_state = DHCP_LINK_DOWN;
 #endif /* USE_DHCP */
-#ifdef SERIAL_DEBUG
-      printf("\n  Network Cable is  \n");
-      printf("    not connected   \n");
-#endif /* SERIAL_DEBUG */
+      LOGR(LOG_MOD_NET, "cable not connected\r\n");
     }
   }
   else
   {
     netif_set_down(&gnetif);
-#ifdef SERIAL_DEBUG
-    printf("\n  ETH_Init failed, EthStatus=0x%lx\n", (unsigned long)EthStatus);
-#endif
+    LOGW(LOG_MOD_NET, "ETH_Init failed, EthStatus=0x%lx\r\n", (unsigned long)hal_eth_get_status());
   }
 
 #if LWIP_NETIF_LINK_CALLBACK
   /* Set the link callback function, this function is called on change of link status*/
-  netif_set_link_callback(&gnetif, ETH_link_callback);
+  netif_set_link_callback(&gnetif, (netif_status_callback_fn)hal_eth_on_link);
 #endif	
 
 }
@@ -283,7 +264,7 @@ void LwIP_Pkt_Handle(void)
 * @param  localtime the current LocalTime value
 * @retval None
 */
-void LwIP_Periodic_Handle(__IO uint32_t localtime)
+void LwIP_Periodic_Handle(volatile uint32_t localtime)
 {
 #if LWIP_TCP
   /* TCP periodic process every 250 ms */
@@ -303,12 +284,11 @@ void LwIP_Periodic_Handle(__IO uint32_t localtime)
 
 	/* Check link status periodically */
 	if ((localtime - LinkTimer) >= LINK_TIMER_INTERVAL) {
-		ETH_CheckLinkStatus(ETHERNET_PHY_ADDRESS);
+		hal_eth_check_link();
 		LinkTimer=localtime;
 	}
 	
 #ifdef USE_DHCP
-  /* Fine DHCP periodic process every 500ms */
   if (localtime - DHCPfineTimer >= DHCP_FINE_TIMER_MSECS)
   {
     DHCPfineTimer =  localtime;
@@ -318,8 +298,7 @@ void LwIP_Periodic_Handle(__IO uint32_t localtime)
           (DHCP_state != DHCP_LINK_DOWN))
     {
 #ifdef SERIAL_DEBUG
-			LED1_TOGGLE;
-			printf("\nFine DHCP periodic process every 500ms\n");
+			hal_led_toggle(HAL_LED_1);
 #endif /* SERIAL_DEBUG */
 
       /* process DHCP state machine */
@@ -340,7 +319,7 @@ void LwIP_Periodic_Handle(__IO uint32_t localtime)
 #ifdef USE_DHCP
 uint8_t gw_addr2;
 
-/* È??È?çlwip2.1.2 DHCP ipË?∑Âè?ÂÆ?Ê?êÊ?∂Ôº?Ëµ?Ê∫êÈ??Ê?æ„?ÅËÆæÁΩÆÁ?∂Ê?Å added by liudayi*/
+/* ??????lwip2.1.2 DHCP ip??????????????????????????????????? added by liudayi*/
 void dhcp_done(struct netif *netif)
 {
 	  struct dhcp *dhcp = netif_dhcp_data(&gnetif);
@@ -362,7 +341,7 @@ void dhcp_done(struct netif *netif)
 
 	  gw_addr2 = (uint8_t)(gnetif.ip_addr.addr >> 16);
 	  
-	  /* Ê†πÊçÆË?∑Âè?Á??ipËÆæÁΩÆÁΩ?Â?≥ */
+	  /* ??????????ip??????? */
 	  IP4_ADDR(&netmask, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
 	  IP4_ADDR(&gw, GW_ADDR0, GW_ADDR1, gw_addr2, GW_ADDR3);
 	  netif_set_addr(&gnetif, &gnetif.ip_addr, &netmask, &gw);
@@ -381,7 +360,7 @@ void LwIP_DHCP_Process_Handle(void)
   ip_addr_t ipaddr;
   ip_addr_t netmask;
   ip_addr_t gw;
-  /* LWIP 2.1.2 ‰∏≠ dhcp Á?∏Â?≥ÂÆ?‰Ω?‰ª?netif‰∏≠Á?¨Á´?Â?∫Êù•‰∫? by ldy */
+  /* LWIP 2.1.2 ? dhcp ????????????netif???????????? by ldy */
   struct dhcp *dhcp = netif_dhcp_data(&gnetif);
 
   switch (DHCP_state)
@@ -390,90 +369,52 @@ void LwIP_DHCP_Process_Handle(void)
     {
       DHCP_state = DHCP_WAIT_ADDRESS;
       dhcp_start(&gnetif);
-      /* IP address should be set to 0 
-         every time we want to assign a new DHCP address */
+      /* clear old IP every time we (re)start DHCP */
       IPaddress = 0;
-#ifdef SERIAL_DEBUG
-			printf("\n     Looking for    \n");
-			printf("     DHCP server    \n");
-			printf("     please wait... \n");
-#endif /* SERIAL_DEBUG */
+      LOGR(LOG_MOD_NET, "dhcp start\r\n");
     }
     break;
 
     case DHCP_WAIT_ADDRESS:
     {
-      /* Read the new IP address */
-	   printf("DHCP_state:%d \n", DHCP_state);
-      //IPaddress = gnetif.ip_addr.u_addr.ip4.addr;
       IPaddress = gnetif.ip_addr.addr;
-	  printf("IP: %d.%d.%d.%d\n",(uint8_t)(IPaddress),(uint8_t)(IPaddress >> 8),
-											(uint8_t)(IPaddress >> 16),(uint8_t)(IPaddress >> 24));
 
-      if (IPaddress!=0) 
+      if (IPaddress != 0)
       {
-        DHCP_state = DHCP_ADDRESS_ASSIGNED;	
-		printf("IP: %d.%d.%d.%d\n",(uint8_t)(IPaddress),(uint8_t)(IPaddress >> 8),
-											  (uint8_t)(IPaddress >> 16),(uint8_t)(IPaddress >> 24));
-
-        /* LWIP 2.1.2Á??dhcp_stop‰º?È??Ê?æÂ?®Ê?ÅÂ??È?çÁ??IPÔº?Âê?Ê?∂Áª?Êù?dhcp client */
-        //dhcp_stop(&gnetif);
+        DHCP_state = DHCP_ADDRESS_ASSIGNED;
+        /* keep negotiated IP, fill static netmask/gateway */
         dhcp_done(&gnetif);
-
-		printf("IP: %d.%d.%d.%d\n",(uint8_t)(IPaddress),(uint8_t)(IPaddress >> 8),
-											  (uint8_t)(IPaddress >> 16),(uint8_t)(IPaddress >> 24));
-
-#ifdef SERIAL_DEBUG
-      	printf("\n  IP address assigned \n");
-				printf("    by a DHCP server   \n");
-		    printf("IP: %d.%d.%d.%d\n",(uint8_t)(IPaddress),(uint8_t)(IPaddress >> 8),
-				                       (uint8_t)(IPaddress >> 16),(uint8_t)(IPaddress >> 24));
-				printf("NETMASK: %d.%d.%d.%d\n",NETMASK_ADDR0,NETMASK_ADDR1,NETMASK_ADDR2,NETMASK_ADDR3);
-				printf("Gateway: %d.%d.%d.%d\n",GW_ADDR0,GW_ADDR1, gw_addr2, GW_ADDR3);
-				  IP4_ADDR(&ipaddr, IP_ADDR0 ,IP_ADDR1 , IP_ADDR2 , IP_ADDR3 );
-
-
-
-        LED1_ON;
-#endif /* SERIAL_DEBUG */
+        LOGR(LOG_MOD_NET, "IP assigned %d.%d.%d.%d (mask %d.%d.%d.%d gw %d.%d.%d.%d)\r\n",
+             (uint8_t)(IPaddress), (uint8_t)(IPaddress >> 8),
+             (uint8_t)(IPaddress >> 16), (uint8_t)(IPaddress >> 24),
+             NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3,
+             GW_ADDR0, GW_ADDR1, gw_addr2, GW_ADDR3);
+        hal_led_on(HAL_LED_1);
       }
       else
       {
-        /* DHCP timeout */
+        /* no address yet: keep waiting; give up after MAX_DHCP_TRIES */
         if (dhcp->tries > MAX_DHCP_TRIES)
         {
           DHCP_state = DHCP_TIMEOUT;
-
-		  /* È??Ê?æÂ?®Ê?ÅÂ??È?çÁ??IPÔº?Âê?Ê?∂Áª?Êù?dhcp client */
           dhcp_stop(&gnetif);
-      
 
-          /* Static address used */
-//          IP4_ADDR(&ipaddr.u_addr.ip4, IP_ADDR0 ,IP_ADDR1 , IP_ADDR2 , IP_ADDR3 );
-//          IP4_ADDR(&netmask.u_addr.ip4, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
-//          IP4_ADDR(&gw.u_addr.ip4, GW_ADDR0, GW_ADDR1, GW_ADDR2, GW_ADDR3);
-//          netif_set_addr(&gnetif, &ipaddr.u_addr.ip4, &netmask.u_addr.ip4, &gw.u_addr.ip4);
+          /* fallback to static configuration */
+          IP4_ADDR(&ipaddr, IP_ADDR0, IP_ADDR1, IP_ADDR2, IP_ADDR3);
+          IP4_ADDR(&netmask, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
+          IP4_ADDR(&gw, GW_ADDR0, GW_ADDR1, GW_ADDR2, GW_ADDR3);
+          netif_set_addr(&gnetif, &ipaddr, &netmask, &gw);
 
-		  IP4_ADDR(&ipaddr, IP_ADDR0 ,IP_ADDR1 , IP_ADDR2 , IP_ADDR3 );
-		  IP4_ADDR(&netmask, NETMASK_ADDR0, NETMASK_ADDR1, NETMASK_ADDR2, NETMASK_ADDR3);
-		  IP4_ADDR(&gw, GW_ADDR0, GW_ADDR1, GW_ADDR2, GW_ADDR3);
-		  netif_set_addr(&gnetif, &ipaddr, &netmask, &gw);
-
-
-
-#ifdef SERIAL_DEBUG
-          printf("\n    DHCP timeout    \n");
-          printf("  Static IP address   \n");
-		      printf("IP: %d.%d.%d.%d\n",IP_ADDR0,IP_ADDR1,IP_ADDR2,IP_ADDR3);
-					printf("NETMASK: %d.%d.%d.%d\n",NETMASK_ADDR0,NETMASK_ADDR1,NETMASK_ADDR2,NETMASK_ADDR3);
-					printf("Gateway: %d.%d.%d.%d\n",GW_ADDR0,GW_ADDR1,GW_ADDR2,GW_ADDR3);
-          LED1_ON;
-#endif /* SERIAL_DEBUG */
+          LOGR(LOG_MOD_NET, "DHCP timeout, fallback static IP %d.%d.%d.%d\r\n",
+               IP_ADDR0, IP_ADDR1, IP_ADDR2, IP_ADDR3);
+          hal_led_on(HAL_LED_1);
         }
       }
     }
     break;
-  default: break;
+
+    default:
+    break;
   }
 
 }

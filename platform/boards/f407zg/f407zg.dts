@@ -1,0 +1,35 @@
+/*
+ * f407zg 板级设备树
+ *
+ * 约定(boot contract, 请勿改动):
+ *   - SPI flash 0xF00000..0xF03FFF 为 dtb 保留区(主槽 0xF00000 / 备份槽 0xF01000, 各 4KB)
+ *   - custom 分区从 0xF04000 开始
+ *
+ * 修改分区布局: 改本文件 → make(自动重编 dtb + 固件内置表) → 烧 dist/f407zg.dtb
+ * 扩展新板子: 新建 platform/boards/<board>/<board>.dts, 复用同一套驱动, 无需改驱动代码。
+ */
+/dts-v1/;
+
+/ {
+    model = "f407zg";
+    compatible = "st,stm32f407zg";
+
+    /* 芯片外设: 描述性数据, 供驱动按 compatible 匹配 */
+    spi-flash {
+        compatible = "w25q128";
+        freq-hz = <50000000>;
+    };
+
+    /* 分区表: 节点名 = 分区标识(与代码中 spi_flash_table[].name 一一对应) */
+    partitions {
+        loader@0x000000    { reg = <0x000000 0x10000>;  crc = <1>; };
+        loader_bk@0x010000 { reg = <0x010000 0x10000>;  crc = <1>; };
+        app1@0x600000      { reg = <0x600000 0x200000>; crc = <1>; };
+        app2@0x800000      { reg = <0x800000 0x200000>; crc = <1>; };
+        ota_info@0xA00000  { reg = <0xA00000 0x100000>; crc = <1>; };
+        log@0xB00000       { reg = <0xB00000 0x200000>; crc = <0>; };
+        web@0xD00000       { reg = <0xD00000 0x100000>; crc = <1>; };
+        config@0xE00000    { reg = <0xE00000 0x100000>; crc = <1>; };
+        custom@0xF04000    { reg = <0xF04000 0xFC000>;  crc = <0>; };
+    };
+};

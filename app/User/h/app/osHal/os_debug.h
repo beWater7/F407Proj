@@ -70,6 +70,13 @@ enum{
 extern char __print_buf__[LINELENTH]; //保存打印内容
 extern uint8 __print_buf_len__;
 
+/* 各等级颜色转义序列（os_debug.c 定义，os_log 模块化打印共用） */
+extern const char *__color_output__[];
+
+/* 把 __print_buf__[0..__print_buf_len__) 输出到 telnet hook + UART。
+ * os_printf_api 与 os_log() 共用，保证单条日志完整写出不拆行 */
+void os_print_buf_flush(void);
+
 void print_redirect(__print_callback__ func, void* argc);
 void os_printf_api( const char *format, ...);
 void os_printf_buff_redirect(uint8 *param, uint16 len, const char *format, ...);

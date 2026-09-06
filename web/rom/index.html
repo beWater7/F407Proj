@@ -70,6 +70,7 @@ pre{background:#0b1220;padding:.6rem;border-radius:.4rem;font-size:.8rem;overflo
     </form>
     <div class="bar"><i id="fwBar"></i></div>
     <pre id="fwOut">请上传 genUpgBin.py 生成的 upg.bin</pre>
+    <p id="otaOut" style="color:var(--mut);font-size:12px">读取升级状态…</p>
   </div>
 </div>
 <script>
@@ -93,8 +94,19 @@ fetch('/protocol/system/info').then(function (r) { return r.json(); }).then(func
   if (d.uptime) document.getElementById('up').textContent = '运行 ' + d.uptime;
   if (d.systime) document.getElementById('tm').textContent = d.systime;
 }).catch(function () {});
-function wifiRefresh() {
-  fetch('/protocol/wifi/config').then(function (r) { return r.json(); }).then(function (j) {
+
+/* 升级状态:当前运行槽 / 目标槽 */
+fetch('/protocol/system/ota').then(function (r) { return r.json(); }).then(function (j) {
+  var d = (j && j.data) ? j.data : {};
+  var el = document.getElementById('otaOut');
+  if (!el) return;
+  if (!d.active_app) { el.textContent = '升级状态读取失败'; return; }
+  el.textContent = '当前运行 APP' + d.active_app + '，升级写入 APP' +
+    d.target_slot + '（回滚槽） ｜ 上次升级 ' +
+    (d.staging_len ? d.staging_len + 'B crc=' + (d.staging_crc32 >>> 0).toString(16)
+                   : '未检测到');
+}).catch(function () {});
+function wifiRefresh() {  fetch('/protocol/wifi/config').then(function (r) { return r.json(); }).then(function (j) {
     var d = (j && j.data) ? j.data : {};
     if (d.ssid != null) {
       document.getElementById('ssid').value = d.ssid;

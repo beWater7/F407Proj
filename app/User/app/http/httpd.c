@@ -117,7 +117,7 @@
 #include "ff.h"
 #endif
 #include "os_debug.h"
-#include "bsp_spi_flash.h"
+#include "os_log.h"
 #include "flash_manage.h"
 #include "httpd.h"
 #include "upgrade.h"
@@ -458,7 +458,7 @@ void httpd_close_all_except(void *keep_http_state)
     }
   }
   if (closed) {
-    os_printf(KERN_WARN"httpd: closed %u other conn(s) for OTA heap\n", closed);
+    LOGW(LOG_MOD_HTTP, "httpd: closed %u other conn(s) for OTA heap\n", closed);
   }
 }
 #else /* LWIP_HTTPD_KILL_OLD_ON_CONNECTIONS_EXCEEDED */
@@ -2181,7 +2181,7 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
         char *data_pos = NULL;
         if(strstr(sp1, "upload"))
         {
-             os_printf(KERN_WARN"[%s:%d]web upgrade start!\n",__FUNCTION__,__LINE__);
+             LOGR(LOG_MOD_HTTP, "web upgrade start!\n");
              gs_hs[0] = hs;
              gs_hs[1] = NULL;
              /* 尽早腾堆，等 body 到达前先释放其它 GET 的大缓冲 */
@@ -2189,7 +2189,7 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
         }
         else if(strstr(sp1, "upgrade"))
         {
-             os_printf(KERN_WARN"[%s:%d]fw upgrade start!\n",__FUNCTION__,__LINE__);
+             LOGR(LOG_MOD_HTTP, "fw upgrade start!\n");
              hs->dwData_len = 0;
              if (NULL != (data_pos = strstr(sp1, "totalSize="))) {
                  char *end;
@@ -2207,7 +2207,7 @@ http_parse_request(struct pbuf *inp, struct http_state *hs, struct altcp_pcb *pc
                      MEMCPY(byTotalLenBuff, data_pos, dwDataLen);
                      hs->dwData_len = (u32_t)atoi(byTotalLenBuff);
                  }
-                 os_printf(KERN_WARN"[%s:%d]fw len: %d!\n", __FUNCTION__, __LINE__, hs->dwData_len);
+                 LOGR(LOG_MOD_HTTP, "fw len: %d!\n", hs->dwData_len);
              }
              gs_hs[1] = hs;
              gs_hs[0] = NULL;

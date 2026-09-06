@@ -2,15 +2,14 @@
 #include <sys/types.h>
 #include <errno.h>
 #include <unistd.h>
-#include "bsp_usart.h"
+#include "hal_uart.h"
 
 int _read(int file, char *ptr, int len) { return 0; }
-/* newlib-nano（Makefile 里 --specs=nano.specs）的 printf 走的是 _write，
- * 不会调用 bsp_debug_usart.c 里的 fputc。以前这里直接 return len，
- * 等于把 boot 的全部串口输出丢掉，看起来像“boot 没跑、直接进 APP”。 */
+/* newlib-nano（Makefile 里 --specs=nano.specs）的 printf 走的是 _write */
 int _write(int file, char *ptr, int len)
 {
     int i;
+    uint8_t cr = '\r';
 
     (void)file;
     for (i = 0; i < len; i++)
@@ -19,11 +18,9 @@ int _write(int file, char *ptr, int len)
          * serialTerm 会把单独的 \r 当成“清当前行”，提示符会被拆成多行碎片。 */
         if (ptr[i] == '\n' && (i == 0 || ptr[i - 1] != '\r'))
         {
-            USART_SendData(DEBUG_USART, '\r');
-            while (USART_GetFlagStatus(DEBUG_USART, USART_FLAG_TXE) == RESET);
+            hal_uart_write(&cr, 1);
         }
-        USART_SendData(DEBUG_USART, (uint8_t)ptr[i]);
-        while (USART_GetFlagStatus(DEBUG_USART, USART_FLAG_TXE) == RESET);
+        hal_uart_write((const uint8_t *)&ptr[i], 1);
     }
     return len;
 }

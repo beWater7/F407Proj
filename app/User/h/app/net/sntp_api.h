@@ -8,7 +8,7 @@ uint32_t get_timestamp(void);
 
 
 /* 外部调用函数 */
-void bsp_sntp_init(void);
+void sntp_api_init(void);
 void print_timestamp(char *buf);
 void RTC_Set_From_Uptime(char *uptime);
 

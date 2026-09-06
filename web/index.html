@@ -108,6 +108,7 @@
       <div class="bg-slate-800 p-4 rounded-xl shadow sm:col-span-2">
         <h2 class="text-cyan-400 font-semibold mb-2">设备升级</h2>
         <p class="text-slate-400 text-xs mb-2">请上传 <code>upg.bin</code>（双槽：<code>python3 genUpgBin.py --fw1 app/build/app1.bin --fw2 app/build/app2.bin --web-dir web</code>）</p>
+        <p id="otaStatusHint" class="text-cyan-500/80 text-xs mb-2">读取升级状态…</p>
         <form id="deviceUpgradeForm" enctype="multipart/form-data" class="space-y-2">
           <input type="file" id="upgradeFile" accept=".bin,application/octet-stream" class="w-full text-slate-300" required>
           <button id="upgradeBtn" class="w-full py-1.5 rounded bg-gradient-to-r from-orange-500 to-red-500 font-bold hover:scale-105 transition">升级设备</button>

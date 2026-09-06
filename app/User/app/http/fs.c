@@ -37,12 +37,14 @@
 
 /* added by liuday */
 #include <stdio.h>
-#include "bsp_spi_flash.h"
+#include "lwip/apps/fs.h"
+#include "flash_manage.h"
 #if defined(CONFIG_APP_FATFS)
 #include "ff.h"
 #endif
 #include "malloc.h"
 #include "os_debug.h"
+#include "os_log.h"
 #include "flash_manage.h"
 #include "upgrade.h"
 #include "os_task.h"
@@ -141,7 +143,7 @@ void parse_web_bin(uint8_t* data)
             gs_webBinHdr.file_count = 0;
             return;
         }
-        os_printf(KERN_INFO"type:%u size:%u offset:%u\r\n", 
+        LOGI(LOG_MOD_HTTP, "web file type:%u size:%u offset:%u\r\n", 
                   gs_webBinHdr.files[i].type, 
                   gs_webBinHdr.files[i].size,
                   gs_webBinHdr.files[i].offset);
@@ -205,7 +207,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
     /* not found */
     if(WEB_FILE_DESC_SIZE == i)
     {
-        os_printf(KERN_INFO"%s not found!\r\n", name);
+        LOGW(LOG_MOD_HTTP, "%s not found!\r\n", name);
         return 0;
     }
     file->fileIndex = byIndex;
@@ -306,7 +308,7 @@ int fs_open_custom(struct fs_file *file, const char *name)
 
     //PartitionRead(uint8_t index, uint32_t offset, uint8_t* data, uint32_t len, uint8_t id)
 
-    os_printf(KERN_TRACE"read web len:%d\r\n", dwWebReadLen);
+    LOGT(LOG_MOD_HTTP, "read web len:%d\r\n", dwWebReadLen);
     //os_debug("name: %s\r\n", name);
 
     /* resp data */

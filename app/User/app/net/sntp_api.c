@@ -5,8 +5,7 @@
 #include "sntp.h"
 #endif
 
-#include "stm32f4xx.h"
-#include "bsp_rtc.h"
+#include "hal_rtc.h"
 #include "os_debug.h"
 #include "log.h"
 #include "safe_utils.h"
@@ -54,7 +53,7 @@ void set_sntp_server_list(void)
 *
 * @retval: 无
 */
-void bsp_sntp_init(void)
+void sntp_api_init(void)
 {
 	//设置 SNTP 的获取方式 -> 使用向服务器获取方式
 	sntp_setoperatingmode(SNTP_OPMODE_POLL);
@@ -89,37 +88,20 @@ void sntp_set_time(uint32_t sntp_time)
 	print_log("sntp_set_time: c01, get time = %lu\n", (unsigned long)sntp_time);
 
 	struct tm *time;
-	RTC_TimeTypeDef sTime = {0};
-	RTC_DateTypeDef sDate = {0};
-
 	sntp_time += (8 * 60 * 60); ///北京时间是东8区需偏移8小时
 
 	time = localtime(&sntp_time);
 
 	/*
-	 * 设置 RTC 的 时间
+	 * 设置 RTC 时间（含日期），并写入备份寄存器标记
 	 */
-	sTime.RTC_H12 = RTC_H12_AMorPM;
-	sTime.RTC_Hours = time->tm_hour;	  
-	sTime.RTC_Minutes = time->tm_min;		
-	sTime.RTC_Seconds = time->tm_sec;	
-	RTC_SetTime(RTC_Format_BINorBCD, &sTime);
-	RTC_WriteBackupRegister(RTC_BKP_DRX, RTC_BKP_DATA);
+	hal_rtc_set_timestamp(sntp_time);
 
-	/*
-	 * 设置 RTC 的 日期
-	 */ 
-	sDate.RTC_WeekDay = time->tm_wday;	 
-	sDate.RTC_Date    = time->tm_mday;	
-	sDate.RTC_Month = time->tm_mon + 1; //tm_mon:0-11, 0表示1月份，依次类推  
-	sDate.RTC_Year = (time->tm_year) + 1900 - 2000;	//tm_mon表示自1900以来的年数(2024对应124)，RTC_Year(0-99, 2024对应24) 	
-	RTC_SetDate(RTC_Format_BINorBCD, &sDate);
-	RTC_WriteBackupRegister(RTC_BKP_DRX, RTC_BKP_DATA);
-
-	print_log("sntp_set_time: c02, decode time: 20%d-%02d-%02d %d:%d:%d\n", \
-				sDate.RTC_Year, sDate.RTC_Month, sDate.RTC_Date, sTime.RTC_Hours, sTime.RTC_Minutes, sTime.RTC_Seconds);
+	print_log("sntp_set_time: c02, decode time: 20%02d-%02d-%02d %d:%d:%d\n", \
+				time->tm_year - 100, time->tm_mon + 1, time->tm_mday, \
+				time->tm_hour, time->tm_min, time->tm_sec);
 	
-	print_log("sntp_set_time: c03, test get = %lu\n", (unsigned long)get_timestamp());
+	print_log("sntp_set_time: c03, test get = %lu\n", (unsigned long)hal_rtc_get_timestamp());
 	print_log("sntp_set_time: c04, set rtc time done\n");
 }
 #endif /* CONFIG_APP_SNTP */
@@ -149,35 +131,25 @@ static int parse_uptime(char* uptime, struct tm *t)
 void RTC_Set_From_Uptime(char *uptime)
 {
     struct tm t;
+    hal_rtc_time_t r;
     if(parse_uptime(uptime, &t) != 0)
     {
         printf("uptime err format!\n");
         return;
     }
 
-    RTC_TimeTypeDef sTime;
-    RTC_DateTypeDef sDate;
-
-    /* 设置 RTC 时间 */
-    sTime.RTC_H12 = RTC_H12_AMorPM;
-    sTime.RTC_Hours   = t.tm_hour;
-    sTime.RTC_Minutes = t.tm_min + 9; // baidu min + 9m
-    sTime.RTC_Seconds = t.tm_sec;
-    RTC_SetTime(RTC_Format_BINorBCD, &sTime);
-    RTC_WriteBackupRegister(RTC_BKP_DRX, RTC_BKP_DATA);
-
-    /* 设置 RTC 日期 */
-    sDate.RTC_WeekDay = t.tm_wday;    
-    sDate.RTC_Date    = t.tm_mday;
-    sDate.RTC_Month   = t.tm_mon + 1;
-    sDate.RTC_Year    = t.tm_year + 1900 - 2000;
-    RTC_SetDate(RTC_Format_BINorBCD, &sDate);
-    RTC_WriteBackupRegister(RTC_BKP_DRX, RTC_BKP_DATA);
+    r.year   = t.tm_year + 1900;
+    r.month  = t.tm_mon + 1;
+    r.day    = t.tm_mday;
+    r.wday   = t.tm_wday;
+    r.hour   = t.tm_hour;
+    r.minute = t.tm_min + 9; // baidu min + 9m
+    r.second = t.tm_sec;
+    hal_rtc_set_time(&r);
 
     os_printf("RTC to → %04d-%02d-%02d %02d:%02d:%02d\n",
-           t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+          t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
 
-	writeLog("esp8266 init");
 }
 
 
@@ -190,27 +162,7 @@ void RTC_Set_From_Uptime(char *uptime)
  */
 uint32_t get_timestamp(void)
 {
-    struct tm stm;
-    static RTC_DateTypeDef g_Date = {0};
-    static RTC_TimeTypeDef g_Time = {0};
-
-    ///获取时间必须在获取日期前
-    RTC_GetTime(RTC_Format_BIN, &g_Time);
-    RTC_GetDate(RTC_Format_BIN, &g_Date);
-
-    stm.tm_year = g_Date.RTC_Year + 100;    //RTC_Year rang 0-99,but tm_year since 1900
-
-    stm.tm_mon = g_Date.RTC_Month - 1;      //RTC_Month rang 1-12,but tm_mon rang 0-11
-
-    stm.tm_mday = g_Date.RTC_Date;          //RTC_Date rang 1-31 and tm_mday rang 1-31
-
-    stm.tm_hour = g_Time.RTC_Hours;         //RTC_Hours rang 0-23 and tm_hour rang 0-23
-
-    stm.tm_min = g_Time.RTC_Minutes;        //RTC_Minutes rang 0-59 and tm_min rang 0-59
-
-    stm.tm_sec = g_Time.RTC_Seconds;
-
-	return (mktime(&stm) - (8 * 60 * 60));///配置时由于东八区增加8小时，现为时间戳，需减去
+    return hal_rtc_get_timestamp();
 }
 
 
@@ -224,25 +176,19 @@ uint32_t get_timestamp(void)
 void print_timestamp(char *buf)
 {
     struct tm stm;
-    static RTC_DateTypeDef g_Date = {0};
-    static RTC_TimeTypeDef g_Time = {0};
+    hal_rtc_time_t r;
 	char byTmp[32] = {0};
 
-    ///获取时间必须在获取日期前
-    RTC_GetTime(RTC_Format_BIN, &g_Time);
-    RTC_GetDate(RTC_Format_BIN, &g_Date);
+	if (hal_rtc_get_time(&r) != 0) {
+        return;
+    }
 
-    stm.tm_year = g_Date.RTC_Year /*+ 100*/;    //RTC_Year rang 0-99,but tm_year since 1900
-
-    stm.tm_mon = g_Date.RTC_Month /*- 1*/;      //RTC_Month rang 1-12,but tm_mon rang 0-11
-
-    stm.tm_mday = g_Date.RTC_Date;          //RTC_Date rang 1-31 and tm_mday rang 1-31
-
-    stm.tm_hour = g_Time.RTC_Hours;         //RTC_Hours rang 0-23 and tm_hour rang 0-23
-
-    stm.tm_min = g_Time.RTC_Minutes;        //RTC_Minutes rang 0-59 and tm_min rang 0-59
-
-    stm.tm_sec = g_Time.RTC_Seconds;
+    stm.tm_year = r.year - 2000;    //RTC_Year rang 0-99,but tm_year since 1900
+    stm.tm_mon  = r.month;
+    stm.tm_mday = r.day;
+    stm.tm_hour = r.hour;
+    stm.tm_min  = r.minute;
+    stm.tm_sec  = r.second;
 
 	if(buf)
 	{

@@ -18,10 +18,10 @@ build/
 # Keep intentional source/data bins if any are added later under ! patterns.
 # Firmware packages are generated (see below).
 
-# ── OTA / web packaging products ──
-/web.bin
-/upg.bin
-/header.bin
+/dist/
+/tools/xfer/xfer
+/upg_web.bin
+/spi_image.bin
 web/web.bin
 web/web-*.bin
 

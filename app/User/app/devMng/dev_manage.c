@@ -79,7 +79,7 @@ int dev_register(uint8_t dev_id, dev_obj *dev)
     dev->next = s_dev_mgr.next;
     s_dev_mgr.next = dev;
     os_mutex_unlock(s_dev_mgr.lock);
-    printf("Device %d registered OK\n", dev_id);
+
     return 0;
 }
 

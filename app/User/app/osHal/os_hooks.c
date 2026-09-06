@@ -1,11 +1,12 @@
 #include "FreeRTOS.h"
 #include "task.h"
-#include "bsp_usart.h"
+#include "hal_uart.h"
+#include <string.h>
 
 static void hook_uart_puts(const char *s)
 {
     if (s != NULL) {
-        Usart_SendString(DEBUG_USART, (char *)s);
+        hal_uart_write((const uint8_t *)s, (uint32_t)strlen(s));
     }
 }
 

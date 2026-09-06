@@ -14,21 +14,22 @@
 #include "devConfig.h"
 #include "os_mutex.h"
 #include "os_task.h"
+#include "os_log.h"
 #include "ping.h"
 #include "flash_manage.h"
+#include "dts.h"
 #include "dev_manage.h"
-#include "stm32f4x7_eth.h"
-#include "stm32f4x7_phy.h"
-#include "bsp_spi_flash.h"
+#include "hal_board.h"
+#include "hal_eth.h"
+#include "hal_flash.h"
 #if defined(CONFIG_APP_DHT11)
-#include "bsp_dht11.h"
+#include "drv_dht11.h"
 #endif
 #include "sntp_api.h"
 #include <string.h>
 #include <stdlib.h>
 #if defined(CONFIG_APP_ESP8266)
-#include "bsp_esp8266.h"
-#include "bsp_esp8266_test.h"
+#include "drv_esp8266.h"
 #endif
 
 extern SYS_THREAD_INFO_T sys_handle_info;
@@ -40,13 +41,6 @@ extern void partition_info_show(void);
 char* tab_arg[4] ={0};
 
 
-/************************************************
-	????
-************************************************/
-void aaa(void)
-{
-	printk("\r\nshow all command ID");
-}
 
 /*******************************************************************************
 ??????look_time
@@ -58,10 +52,9 @@ void aaa(void)
 *******************************************************************************/
 static void look_time(void * arg)
 {
-	RCC_ClocksTypeDef  get_rcc_clock;  
-	RCC_GetClocksFreq(&get_rcc_clock);
-	uint32_t data[] = {get_rcc_clock.SYSCLK_Frequency ,get_rcc_clock.HCLK_Frequency ,get_rcc_clock.PCLK1_Frequency ,
-										 get_rcc_clock.PCLK2_Frequency  /*,get_rcc_clock.ADCCLK_Frequency*/};
+	hal_board_clocks_t clk;
+	hal_board_get_clocks(&clk);
+	uint32_t data[] = {clk.sysclk_hz, clk.hclk_hz, clk.pclk1_hz, clk.pclk2_hz};
 	printk("\r\n\tSYSCLK:%uHz"  ,data[0]);
 	printk("\r\n\tHCLK:%uHz"    ,data[1]);
 	printk("\r\n\tPCLK1:%uHz"   ,data[2]);
@@ -289,7 +282,7 @@ static void sys_reboot_now(void *arg)
 {
     UNUSED_ARG(arg);
     /* ??????reboot */
-    NVIC_SystemReset();
+    hal_board_reboot();
 }
 
 
@@ -333,12 +326,11 @@ static void sys_ifconfig(void *arg)
     net_ipv4_to_str(&gw, ipbuf, sizeof(ipbuf));
     printk("Gateway: %s\n", ipbuf);
     {
-        extern __IO uint32_t EthStatus;
-        uint16_t bsr = ETH_ReadPHYRegister(ETHERNET_PHY_ADDRESS, PHY_BSR);
+        uint16_t bsr = hal_eth_read_phy(0x01);
         printk("flags: up=%d link=%d EthStatus=0x%lx PHY_BSR=0x%04x\n",
                net_is_up(),
                net_is_link_up(),
-               (unsigned long)EthStatus,
+               (unsigned long)hal_eth_get_status(),
                (unsigned)bsr);
     }
     printk("%s", SHELL_PROMPT);
@@ -436,6 +428,72 @@ end:
     printk("current Level:%s  %d\n",log_level_str[__printf_level__],__printf_level__);
     printk("%s", SHELL_PROMPT);
     return;
+}
+
+/* dbg: 统一模块日志开关(见 os_log.h)
+ *   dbg             列出所有模块与开关
+ *   dbg <mod>       查单个模块状态
+ *   dbg <mod> 0|1   关/开模块 (0=整模块静默, 含错误)
+ *   dbg all 0|1     一键全关/全开
+ */
+static void sys_log_dbg(void *arg)
+{
+    char *argv[3] = {0};
+    int argc = 0;
+    int i;
+    int on = -1;
+
+    argc = cmdline_strtok((char *)arg, argv, 3);
+
+    /* 设开关: dbg <mod|all> <0|1> */
+    if (argc >= 3) {
+        on = atoi(argv[2]) ? 1 : 0;
+        if (strcmp(argv[1], "all") == 0) {
+            for (i = 0; i < LOG_MOD_MAX; i++) {
+                g_log_mods[i].enabled = (uint8_t)on;
+            }
+        } else {
+            for (i = 0; i < LOG_MOD_MAX; i++) {
+                if (strcmp(argv[1], g_log_mods[i].name) == 0) {
+                    g_log_mods[i].enabled = (uint8_t)on;
+                    break;
+                }
+            }
+            if (i >= LOG_MOD_MAX) {
+                printk("dbg: unknown module '%s'\r\n", argv[1]);
+                printk("%s", SHELL_PROMPT);
+                return;
+            }
+        }
+        printk("dbg: %s -> %s\r\n", argv[1], on ? "ON" : "OFF");
+        printk("%s", SHELL_PROMPT);
+        return;
+    }
+
+    /* 查单个: dbg <mod> */
+    if (argc == 2 && strcmp(argv[1], "all") != 0) {
+        for (i = 0; i < LOG_MOD_MAX; i++) {
+            if (strcmp(argv[1], g_log_mods[i].name) == 0) {
+                printk("%-8s %-10s %s\r\n", g_log_mods[i].name,
+                       g_log_mods[i].prefix,
+                       g_log_mods[i].enabled ? "ON" : "OFF");
+                printk("%s", SHELL_PROMPT);
+                return;
+            }
+        }
+        printk("dbg: unknown module '%s'\r\n", argv[1]);
+        printk("%s", SHELL_PROMPT);
+        return;
+    }
+
+    /* dbg / dbg all: 列出全部模块 */
+    printk("dbg: <mod> [0|1]  (0=静默 1=开)\r\n");
+    for (i = 0; i < LOG_MOD_MAX; i++) {
+        printk("  %-8s %-10s %s\r\n", g_log_mods[i].name,
+               g_log_mods[i].prefix,
+               g_log_mods[i].enabled ? "ON" : "OFF");
+    }
+    printk("%s", SHELL_PROMPT);
 }
 
 
@@ -609,9 +667,8 @@ static void sys_spi_id(void *arg)
 {
     uint32_t id;
     (void)arg;
-    id = SPI_FLASH_ReadID();
-    printk("\r\nSPI JEDEC ID=0x%06lX (expect 0x%06X)\r\n",
-           (unsigned long)id, (unsigned)sFLASH_ID);
+    id = hal_spi_flash_read_id();
+    printk("\r\nSPI JEDEC ID=0x%06lX\r\n", (unsigned long)id);
     printk("%s", SHELL_PROMPT);
 }
 
@@ -817,6 +874,53 @@ void printTaskList(uint8_t* param, void *arg) {
 }
 #endif
 
+/* dts: 设备树信息/分区表/热重载 */
+static void sys_dts(void *arg)
+{
+    char *argv[2] = {0};
+    int argc = cmdline_strtok((char *)arg, argv, 2);
+    const char *cmd = (argc >= 2) ? argv[1] : "info";
+    const dts_ctx_t *ctx = dts_ctx();
+    int i;
+
+    if (strcmp(cmd, "reload") == 0) {
+        dts_load_default();
+        dts_apply_partitions();
+        printk("dts reload done, src=%s model=%s\n",
+               dts_source_str(), dts_model());
+        printk("%s", SHELL_PROMPT);
+        return;
+    }
+
+    if (strcmp(cmd, "list") == 0) {
+        printk("dts %s v%u %uB src=%s nodes=%u\n",
+               dts_model(), dts_version(), (unsigned)ctx->blob_len,
+               dts_source_str(), (unsigned)ctx->hdr->node_cnt);
+        printk("  %-10s %-10s %-10s %s\n", "name", "addr", "size", "crc");
+        for (i = 1; i < ctx->hdr->node_cnt; i++) {
+            const dts_node_t *n = &ctx->nodes[i];
+            const char *nm = ctx->strtab + n->name_off;
+            uint32_t crc = 0;
+            if (n->reg_size == 0) {
+                continue;
+            }
+            dts_prop_u32(n, "crc", &crc);
+            printk("  %-10s 0x%06lX 0x%-8lX %u\n", nm,
+                   (unsigned long)n->reg_addr, (unsigned long)n->reg_size,
+                   (unsigned)crc);
+        }
+        printk("%s", SHELL_PROMPT);
+        return;
+    }
+
+    /* info */
+    printk("model=%s version=%u src=%s blob=%uB nodes=%u\n",
+           dts_model(), dts_version(), dts_source_str(),
+           (unsigned)(ctx ? ctx->blob_len : 0),
+           (unsigned)(ctx ? ctx->hdr->node_cnt : 0));
+    printk("%s", SHELL_PROMPT);
+}
+
 /* end */
 
 /*******************************************************************************
@@ -837,6 +941,7 @@ void shell_conteol_register(void)
     shell_register_command("ifconfig", sys_ifconfig);
     shell_register_command("dhcp", dhcp_config);
     shell_register_command("debugLevel", debugLevelShell);
+    shell_register_command("dbg", sys_log_dbg);
     shell_register_command("uptime", uptime);
     shell_register_command("reboot", sys_reboot_now);
 	shell_register_command("free", CheckHeapUsage);
@@ -849,6 +954,7 @@ void shell_conteol_register(void)
 	shell_register_command("clearLog", sys_clear_log);
 	shell_register_command("setWeb", sysSetWeb);
 	shell_register_command("ping", sys_ping);
+	shell_register_command("dts", sys_dts);
 #if defined(CONFIG_APP_ESP8266)
 	shell_register_command("wifi", sys_wifi);
 	shell_register_command("wifi_scan", sys_wifi);

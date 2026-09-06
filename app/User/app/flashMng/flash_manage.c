@@ -10,10 +10,11 @@
  * @copyright Copyright (c) [2025] [LDY/STM32F407]
  ***************************************************************/
 #include <string.h>
-#include "bsp_internalFlash.h"
+#include "hal_flash.h"
 #include "flash_manage.h"
 #include "crc.h"
 #include "upgrade.h"
+#include "dts.h"
 
 
 /*****************************************************
@@ -37,7 +38,7 @@ static int flash_partition_erase(STORAGE_CTRL_T *self,  uint8_t index, uint32_t 
     CUSTOM_ASSERT(end_addr > self->pPartInfo[index].start_addr + self->pPartInfo[index].size, return -1);
 
     /* 必须按介质类型选擦除方式：以前用 byManage 会误把 SPI 当成内部 Flash
-     * 走 GetSector()，配置区永远擦不干净 → DEV_MNG_MAGIC 写不进去 */
+     * 走 hal_int_flash_get_sector()，配置区永远擦不干净 → DEV_MNG_MAGIC 写不进去 */
     if (SPI_FLASH_DEV_ID == self->dev.dev_id)
     {
         if (self->byManage) {
@@ -49,9 +50,9 @@ static int flash_partition_erase(STORAGE_CTRL_T *self,  uint8_t index, uint32_t 
     }
     else
     {
-        /* 内部flash：GetSector 返回扇区编号，步进 8 */
-        sector_start = GetSector(start_addr);
-        sector_end  = GetSector(end_addr - 1);
+        /* 内部flash：hal_int_flash_get_sector 返回扇区编号，步进 8 */
+        sector_start = hal_int_flash_get_sector(start_addr);
+        sector_end  = hal_int_flash_get_sector(end_addr - 1);
         dwUnitLen = 8;
     }
 
@@ -375,6 +376,43 @@ void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInf
 #endif
     }
     return;
+}
+
+
+/*****************************************************
+ * @fn       dts_apply_partitions
+ * @brief    用设备树(dts)分区表覆盖 spi_flash_table 的 addr/size/flags
+ * @note     dts 未描述的分区保持代码默认值(前向兼容); 返回应用到分区数
+ *****************************************************/
+int dts_apply_partitions(void)
+{
+    int i;
+    int applied = 0;
+    const dts_ctx_t *ctx = dts_ctx();
+
+    if (ctx == NULL || ctx->hdr == NULL || ctx->nodes == NULL) {
+        os_debug("dts_apply: dts 未加载\n");
+        return -1;
+    }
+
+    for (i = 0; i < SPI_FLASH_PART_MAX; i++) {
+        const dts_node_t *n = dts_find_by_name(spi_flash_table[i].name);
+        uint32_t crc = 0;
+
+        if (n == NULL || n->reg_size == 0) {
+            os_debug("dts_apply: 分区 '%s' 未在 dts 中描述, 保持代码默认\n",
+                     spi_flash_table[i].name);
+            continue;
+        }
+        spi_flash_table[i].start_addr = n->reg_addr;
+        spi_flash_table[i].size       = n->reg_size;
+        spi_flash_table[i].flags      = 0;
+        if (dts_prop_u32(n, "crc", &crc) == 0 && crc) {
+            spi_flash_table[i].flags |= PART_CRCCHECK_EN;
+        }
+        applied++;
+    }
+    return applied;
 }
 
 

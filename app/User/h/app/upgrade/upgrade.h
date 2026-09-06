@@ -15,6 +15,7 @@
 
 #include "typedef.h"
 #include "lwip/apps/fs.h"
+#include "flash_map.h"
 
 typedef enum {
   UPDATE_IDLE             = 0x00, // 无升级
@@ -64,8 +65,19 @@ typedef struct {
 #define CONTENT_TYPE      "Content-Type: "
 #define CONTENT_TYPE_LEN   14
 
-#define UPG_HDR_MAGIC       0x55475021u  /* 单槽: fw + web */
-#define UPG_HDR_MAGIC_DUAL  0x55475022u  /* 双槽: fw1 + fw2 + web */
+#define UPG_HDR_MAGIC       0x55475021u  /* 单槽: fw + web（旧包） */
+#define UPG_HDR_MAGIC_DUAL  0x55475022u  /* 双槽: fw1 + fw2 + web（旧包） */
+#define UPG_HDR_MAGIC_LDR   0x55475023u  /* 现行: loader blob + fw1 + fw2 + 可选 web */
+
+/* 现行升级包：payload = [loader_blob][APP1][APP2][web?]；web_len=0 即 upg.bin */
+struct upg_header_ldr {
+    uint32_t magic;       /* UPG_HDR_MAGIC_LDR */
+    uint32_t loader_len;  /* [loader_header_t][loader.bin] */
+    uint32_t fw1_len;
+    uint32_t fw2_len;
+    uint32_t web_len;     /* 0 = 不含 web */
+    uint32_t crc;         /* crc32(loader|fw1|fw2|web) */
+};
 /* 升级模式 */
 #define MAIN_APP  1
 #define DUAL_APP  2
@@ -91,8 +103,8 @@ typedef struct {
 // 定义进度条长度
 #define PROGRESS_BAR_LENGTH 53
 
-#define APP1_ADDRESS (ADDR_FLASH_SECTOR_0 + 0x00008000) //0x08008000
-#define APP2_ADDRESS ADDR_FLASH_SECTOR_7                //0x08060000
+#define APP1_ADDRESS APP1_FLASH_BASE
+#define APP2_ADDRESS APP2_FLASH_BASE
 #define APP_FLASH_SIZE       (256u * 1024u)
 
 /*--------------------------WEB--------------------------*/
@@ -149,6 +161,10 @@ int upgrade_write_fw_v2(uint8 *fw, uint32 len);
 /** 固件已在 SPI PART_APP1 时，只写 OTA 标志（流式升级收尾用） */
 int upgrade_commit_ota_flag(uint32 len, uint32 crc32);
 uint8_t ota_get_active_slot(void);
+
+/* loader OTA：把 [loader_header_t][loader.bin] blob 直接写入 SPI PART_LOADER 主区
+ * + 内部 Flash 备份（不再走 PART_LOADER_BK staging）。 */
+int upgrade_write_loader(const uint8_t *blob, uint32_t len);
 
 /* OTA 前腾堆：挂起后台任务、关闭其它 HTTP 连接 */
 void ota_register_background_task(void *task_handle);

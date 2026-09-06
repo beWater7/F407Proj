@@ -1,53 +1,97 @@
 #!/bin/sh
-# 只烧录，不编译。SWD 走 tools/pyocd.sh；web 在 SPI Flash，走 HTTP POST。
+# SWD 兜底烧录（不编译）。日常升级请用 ./tools/xfer/xfer（SPI 上的 loader 收 upg.bin）。
+#
+# pyOCD 只能写内部 Flash。当前启动链：
+#   stage0 boot @ 0x08000000
+#     → SPI PART_LOADER / PART_LOADER_BK
+#     → 内部 loader blob @ 0x080C0000
+#     → UART XMODEM
+#     → 直接跳 APP
+# 串口挂了或 SPI loader 坏了：本脚本把 boot + 内部 loader 备份 + APP 双槽写进去，
+# stage0 不靠 SPI 也能拉起 SRAM loader，再跳刚烧的 APP。
 set -e
 
 PROJ_ROOT="$(cd "$(dirname "$0")" && pwd)"
 PYOCD="$PROJ_ROOT/tools/pyocd.sh"
 TARGET=stm32f407zgtx
 
-APP_BIN_DEFAULT="$PROJ_ROOT/app/build/app.bin"
-APP2_BIN_DEFAULT="$PROJ_ROOT/app/build/app2.bin"
-BOOT_BIN_DEFAULT="$PROJ_ROOT/bootloader/build/loader.bin"
+first_existing() {
+  for f in "$@"; do
+    if [ -f "$f" ]; then
+      printf '%s' "$f"
+      return 0
+    fi
+  done
+  printf '%s' "$1"
+}
+
+BOOT_BIN_DEFAULT="$(first_existing \
+  "$PROJ_ROOT/dist/boot.bin" \
+  "$PROJ_ROOT/boot/build/boot.bin")"
+APP_BIN_DEFAULT="$(first_existing \
+  "$PROJ_ROOT/dist/app.bin" \
+  "$PROJ_ROOT/app/build/app.bin")"
+APP2_BIN_DEFAULT="$(first_existing \
+  "$PROJ_ROOT/dist/app2.bin" \
+  "$PROJ_ROOT/app/build/app2.bin")"
+# build/ 是刚编出来的；dist/ 可能是旧 make 留下的
+LOADER_BIN_DEFAULT="$(first_existing \
+  "$PROJ_ROOT/loader/build/loader.bin" \
+  "$PROJ_ROOT/dist/loader.bin")"
 WEB_BIN_DEFAULT="$PROJ_ROOT/web.bin"
 WEB_DIR_DEFAULT="$PROJ_ROOT/web"
+
+BOOT_BASE=0x08000000
 APP_BASE=0x08008000
 APP2_BASE=0x08060000
-BOOT_BASE=0x08000000
-# 内部 PART_RES：Boot 看到 HFLS cookie 后取消 SPI pending OTA（pyocd 改不了 SPI）
 HOST_FLASH_BASE=0x080A0000
 HOST_FLASH_MAGIC=0x534C4648
+LOADER_BACKUP_BASE=0x080C0000
 
 BOARD_IP="${BOARD_IP:-192.168.137.122}"
 BOARD_WAIT="${BOARD_WAIT:-45}"
+SERIAL="${SERIAL:-/dev/ttyUSB0}"
 
 usage() {
   cat <<EOF
-Usage: $0 <app|boot|web|all|reset> [cmd...] [bin_path]
+Usage: $0 <recover|boot|loader|app|web|spi-img|upg|reset> [cmd...] [bin_path]
 
-Flash only (no make). Internal Flash via pyOCD; web via HTTP (SPI NOR).
+SWD 兜底（内部 Flash / pyOCD）。SPI 上的 loader/app 日常请用串口：
+  ./tools/xfer/xfer $SERIAL dist/upg.bin
 
-Commands (can combine, e.g. app web):
-  boot                 loader.bin  @ 0x08000000 (SWD)
-  app                  app1.bin @ 0x08008000 + app2.bin @ 0x08060000 + cookie
-  web                  pack web/ → POST /protocol/system/upload
-  all                  boot then app (no web)
-  reset                pyocd reset only
+内部 Flash 布局（与 stage0 启动顺序一致）：
+  0x08000000  boot          32K   固化 stage0
+  0x08008000  app1
+  0x08060000  app2
+  0x080A0000  HFLS cookie         直烧 APP 后禁止 SPI pending OTA 盖掉
+  0x080C0000  loader blob   64K   stage0 第 3 源（SPI 没有 loader 时用）
+
+Commands（可组合，例如: boot loader app）:
+  recover              兜底：boot + 内部 loader 备份 + APP 双槽 + cookie + reset
+  boot                 stage0 boot.bin @ 0x08000000
+  loader               内部 loader 备份：把 loader.bin 打成 2LDR blob @ 0x080C0000
+  app                  app1 + app2 + HFLS cookie
+  web                  pack web/ → POST /protocol/system/upload（SPI，需 APP 已起来）
+  spi-img              生成 W25Q128 全量镜像 spi_image.bin（离线烧 SPI）
+  upg                  日常串口：./tools/xfer/xfer \$SERIAL dist/upg.bin
+  reset                pyocd reset
+  all                  同 recover
 
 Examples:
+  $0 recover
   $0 boot
+  $0 loader
   $0 app
-  $0 web
-  $0 app web
-  $0 all
-  $0 app /path/to/x.bin
-  $0 boot /path/to/y.bin web
+  $0 upg
+  SERIAL=/dev/ttyUSB1 $0 upg
 
 Env:
-  BOARD_IP=$BOARD_IP     board IPv4 for web upload
-  BOARD_WAIT=$BOARD_WAIT           seconds to wait for ping before web
-  WEB_BIN=path             use this web.bin instead of packing web/
+  SERIAL=$SERIAL
+  BOARD_IP=$BOARD_IP
+  BOARD_WAIT=$BOARD_WAIT
+  WEB_BIN=path
   SKIP_WEB_PACK=1          use existing $WEB_BIN_DEFAULT
+  PROJ_ROOT  亦可给 tools/pyocd.sh 用（本脚本已自定）
 
 EOF
   exit 1
@@ -56,14 +100,14 @@ EOF
 need_bin() {
   if [ ! -f "$1" ]; then
     echo "ERROR: bin not found: $1" >&2
-    echo "  Build first: ./app/buildApp.sh 0   or  ./bootloader/buildBoot.sh 0" >&2
+    echo "  Build first: make" >&2
     exit 1
   fi
 }
 
 is_cmd() {
   case "$1" in
-    app|application|boot|bootloader|loader|web|www|all|both|reset|-h|--help|help)
+    app|application|boot|stage0|bootloader|loader|loader-bk|loader-backup|web|www|all|both|recover|unbrick|spi-img|upg|xfer|serial|reset|-h|--help|help)
       return 0
       ;;
     *)
@@ -83,7 +127,7 @@ flash_one() {
   echo "flash $name ok"
 }
 
-# 直烧 APP 后写一次性 cookie，避免 Boot 再用 SPI 里残留的网页 OTA 把刚烧的镜像盖掉
+# 直烧 APP 后写一次性 cookie，避免 loader 再用 SPI 里残留的 pending OTA 盖掉
 write_host_flash_cookie() {
   slot="${1:-0}"
   tmp="$(mktemp --suffix=.bin)"
@@ -98,13 +142,32 @@ write_host_flash_cookie() {
 flash_app_slots() {
   app1="$1"
   flash_one app1 "$app1" "$APP_BASE"
-  # 只烧 APP1 时，Boot 若 SPI active_app=APP2 会继续跑旧镜像（build time 不变）
   if [ "$app1" = "$APP_BIN_DEFAULT" ] && [ -f "$APP2_BIN_DEFAULT" ]; then
     flash_one app2 "$APP2_BIN_DEFAULT" "$APP2_BASE"
   else
     echo "skip APP2 (custom bin or app2.bin missing)"
   fi
   write_host_flash_cookie 0
+}
+
+# stage0 从 0x080C0000 读 [loader_header_t][loader.bin]，不是裸 loader.bin
+flash_loader_backup() {
+  loader_bin="$1"
+  tmp="$(mktemp --suffix=.bin)"
+
+  need_bin "$loader_bin"
+  echo "pack loader blob from $loader_bin"
+  python3 "$PROJ_ROOT/tools/pack/make_loader_blob.py" "$loader_bin" -o "$tmp"
+  echo "flash loader backup: $tmp @ $LOADER_BACKUP_BASE"
+  "$PYOCD" load --format bin "$tmp" -t "$TARGET" --base-address "$LOADER_BACKUP_BASE"
+  rm -f "$tmp"
+  echo "flash loader backup ok (boot 兜底源 @ $LOADER_BACKUP_BASE)"
+  echo
+  echo "NOTE: 这不会改你现在看到的 logo。"
+  echo "  boot 启动顺序: 1) SPI PART_LOADER  2) 内部备份  3) UART XMODEM"
+  echo "  SPI 上已有合法 loader 时，#2 根本不会跑。"
+  echo "  要换 SRAM loader / logo:  ./tools/xfer/xfer \$SERIAL dist/upg.bin"
+  echo "  （或 ./flash.sh upg）把新 loader 写进 SPI。"
 }
 
 wait_board() {
@@ -121,11 +184,11 @@ wait_board() {
     i=$((i + 1))
   done
   echo "ERROR: $ip not reachable after ${max}s" >&2
-  echo "  APP/ETH not up? Check USB NIC, or skip web: FLASH_WEB=0 ./app/buildApp.sh 1" >&2
+  echo "  APP/ETH not up? Check USB NIC, or skip web." >&2
   return 1
 }
 
-# web 在 W25Q SPI @ PART_WEB，pyOCD 写不了。APP 起来后走现有 HTTP 上传。
+# web 在 W25Q SPI @ PART_WEB，pyOCD 写不了。APP 起来后走 HTTP 上传。
 flash_web() {
   echo "flash web: pack → http://${BOARD_IP}/protocol/system/upload"
   wait_board "$BOARD_IP" "$BOARD_WAIT"
@@ -145,7 +208,7 @@ web_dir = Path(sys.argv[4])
 web_bin_env = os.environ.get("WEB_BIN", "").strip()
 skip_pack = os.environ.get("SKIP_WEB_PACK", "0") == "1"
 
-sys.path.insert(0, str(proj))
+sys.path.insert(0, str(proj / "tools" / "pack"))
 from genUpgBin import pack_web_bin
 
 if web_bin_env:
@@ -198,16 +261,45 @@ print("flash web ok")
 PY
 }
 
+spi_img() {
+  echo "== genSpiImage.py =="
+  web_opt=""
+  if [ -f "$WEB_BIN_DEFAULT" ]; then
+    web_opt="--web-bin $WEB_BIN_DEFAULT"
+  fi
+  python3 "$PROJ_ROOT/tools/pack/genSpiImage.py" $web_opt --out "$PROJ_ROOT/spi_image.bin"
+  echo
+  echo "== 烧录提示 =="
+  echo "  SPI 离线烧录器：整片写 $PROJ_ROOT/spi_image.bin"
+  echo "  内部 Flash 兜底（不靠 SPI）: $0 recover"
+}
+
+flash_upg_serial() {
+  xfer="$PROJ_ROOT/tools/xfer/xfer"
+  upg="$(first_existing "$PROJ_ROOT/dist/upg.bin" "$PROJ_ROOT/upg.bin")"
+  if [ ! -x "$xfer" ]; then
+    echo "ERROR: $xfer missing — make -C tools" >&2
+    exit 1
+  fi
+  need_bin "$upg"
+  echo "serial upg: $xfer $SERIAL $upg"
+  exec "$xfer" "$SERIAL" "$upg"
+}
+
 if [ $# -eq 0 ]; then
   usage
 fi
 
 DO_APP=0
 DO_BOOT=0
+DO_LOADER=0
 DO_WEB=0
 DO_RESET=0
+DO_SPIIMG=0
+DO_UPG=0
 APP_BIN="$APP_BIN_DEFAULT"
 BOOT_BIN="$BOOT_BIN_DEFAULT"
+LOADER_BIN="$LOADER_BIN_DEFAULT"
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -222,7 +314,7 @@ while [ $# -gt 0 ]; do
         shift
       fi
       ;;
-    boot|bootloader|loader)
+    boot|stage0|bootloader)
       DO_BOOT=1
       shift
       if [ $# -gt 0 ] && ! is_cmd "$1"; then
@@ -230,14 +322,36 @@ while [ $# -gt 0 ]; do
         shift
       fi
       ;;
+    loader|loader-bk|loader-backup)
+      DO_LOADER=1
+      shift
+      if [ $# -gt 0 ] && ! is_cmd "$1"; then
+        LOADER_BIN="$1"
+        shift
+      fi
+      ;;
+    recover|unbrick|all|both)
+      DO_BOOT=1
+      DO_LOADER=1
+      DO_APP=1
+      DO_RESET=1
+      shift
+      ;;
     web|www)
       DO_WEB=1
       shift
       ;;
-    all|both)
-      DO_BOOT=1
-      DO_APP=1
+    spi-img)
+      DO_SPIIMG=1
       shift
+      ;;
+    upg|xfer|serial)
+      DO_UPG=1
+      shift
+      if [ $# -gt 0 ] && ! is_cmd "$1"; then
+        SERIAL="$1"
+        shift
+      fi
       ;;
     reset)
       DO_RESET=1
@@ -251,8 +365,15 @@ while [ $# -gt 0 ]; do
   esac
 done
 
+if [ "$DO_UPG" -eq 1 ]; then
+  flash_upg_serial
+fi
+
 if [ "$DO_BOOT" -eq 1 ]; then
   flash_one boot "$BOOT_BIN" "$BOOT_BASE"
+fi
+if [ "$DO_LOADER" -eq 1 ]; then
+  flash_loader_backup "$LOADER_BIN"
 fi
 if [ "$DO_APP" -eq 1 ]; then
   flash_app_slots "$APP_BIN"
@@ -261,9 +382,12 @@ if [ "$DO_RESET" -eq 1 ]; then
   "$PYOCD" reset -t "$TARGET"
   echo "reset ok"
 fi
+if [ "$DO_SPIIMG" -eq 1 ]; then
+  spi_img
+fi
 if [ "$DO_WEB" -eq 1 ]; then
   flash_web
 fi
-if [ "$DO_BOOT" -eq 1 ] && [ "$DO_APP" -eq 1 ]; then
-  echo "flash all ok"
+if [ "$DO_BOOT" -eq 1 ] && [ "$DO_LOADER" -eq 1 ] && [ "$DO_APP" -eq 1 ]; then
+  echo "flash recover ok (boot + internal loader + app)"
 fi

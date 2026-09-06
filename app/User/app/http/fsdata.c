@@ -1,5 +1,5 @@
 /*
- * 由 web/gen_fsdata.py 从 web/rom 的 HTML 生成，勿手改。
+ * 由 tools/pack/gen_fsdata.py 从 web/rom 的 HTML 生成，勿手改。
  * SPI PART_WEB 无效时，httpd 回落到这里（片内 .rodata，零拷贝）。
  */
 #include "lwip/apps/fs.h"
@@ -15,12 +15,12 @@
 #endif
 
 #define FSDATA_NAME_LEN_index_shtml 16
-/* /index.shtml  name_len=16 payload=7439 */
+/* /index.shtml  name_len=16 payload=8129 */
 static const char data__index_shtml[] =
   "/index.shtml\0\0\0\0HTTP/1.0 200 OK\r\n"
   "Server: lwIP/2.1.2\r\n"
   "Content-Type: text/html; charset=utf-8\r\n"
-  "Content-Length: 7319\r\n"
+  "Content-Length: 8009\r\n"
   "Connection: close\r\n"
   "\r\n"
   "<!DOCTYPE html>\n"
@@ -110,6 +110,8 @@ static const char data__index_shtml[] =
   "    </form>\n"
   "    <div class=\"bar\"><i id=\"fwBar\"></i></div>\n"
   "    <pre id=\"fwOut\">\350\257\267\344\270\212\344\274\240 genUpgBin.py \347\224\237\346\210\220\347\232\204 upg.bin</pre>\n"
+  "    <p id=\"otaOut\" style=\"color:var(--mut);font-size:12px\">\350\257\273\345\217\226\345\215\207\347\272\247\347\212\266\346\200\201\342\200\246"
+  "</p>\n"
   "  </div>\n"
   "</div>\n"
   "<script>\n"
@@ -136,9 +138,22 @@ static const char data__index_shtml[] =
   ";\n"
   "  if (d.systime) document.getElementById('tm').textContent = d.systime;\n"
   "}).catch(function () {});\n"
-  "function wifiRefresh() {\n"
-  "  fetch('/protocol/wifi/config').then(function (r) { return r.json(); }).then(fu"
-  "nction (j) {\n"
+  "\n"
+  "/* \345\215\207\347\272\247\347\212\266\346\200\201:\345\275\223\345\211\215\350\277\220\350\241\214\346\247\275 / \347\233\256\346\240\207\346\247\275 */\n"
+  "fetch('/protocol/system/ota').then(function (r) { return r.json(); }).then(funct"
+  "ion (j) {\n"
+  "  var d = (j && j.data) ? j.data : {};\n"
+  "  var el = document.getElementById('otaOut');\n"
+  "  if (!el) return;\n"
+  "  if (!d.active_app) { el.textContent = '\345\215\207\347\272\247\347\212\266\346\200\201\350\257\273\345\217\226\345\244\261\350\264\245'; return; }\n"
+  "  el.textContent = '\345\275\223\345\211\215\350\277\220\350\241\214 APP' + d.active_app + '\357\274\214\345\215\207\347\272\247\345\206\231\345\205\245 APP' +\n"
+  "    d.target_slot + '\357\274\210\345\233\236\346\273\232\346\247\275\357\274\211 \357\275\234 \344\270\212\346\254\241\345\215\207\347\272\247 ' +\n"
+  "    (d.staging_len ? d.staging_len + 'B crc=' + (d.staging_crc32 >>> 0).toString"
+  "(16)\n"
+  "                   : '\346\234\252\346\243\200\346\265\213\345\210\260');\n"
+  "}).catch(function () {});\n"
+  "function wifiRefresh() {  fetch('/protocol/wifi/config').then(function (r) { ret"
+  "urn r.json(); }).then(function (j) {\n"
   "    var d = (j && j.data) ? j.data : {};\n"
   "    if (d.ssid != null) {\n"
   "      document.getElementById('ssid').value = d.ssid;\n"
@@ -222,12 +237,12 @@ static const char data__index_shtml[] =
   "</html>\n";
 
 #define FSDATA_NAME_LEN_index_html 12
-/* /index.html  name_len=12 payload=7439 */
+/* /index.html  name_len=12 payload=8129 */
 static const char data__index_html[] =
   "/index.html\0HTTP/1.0 200 OK\r\n"
   "Server: lwIP/2.1.2\r\n"
   "Content-Type: text/html; charset=utf-8\r\n"
-  "Content-Length: 7319\r\n"
+  "Content-Length: 8009\r\n"
   "Connection: close\r\n"
   "\r\n"
   "<!DOCTYPE html>\n"
@@ -317,6 +332,8 @@ static const char data__index_html[] =
   "    </form>\n"
   "    <div class=\"bar\"><i id=\"fwBar\"></i></div>\n"
   "    <pre id=\"fwOut\">\350\257\267\344\270\212\344\274\240 genUpgBin.py \347\224\237\346\210\220\347\232\204 upg.bin</pre>\n"
+  "    <p id=\"otaOut\" style=\"color:var(--mut);font-size:12px\">\350\257\273\345\217\226\345\215\207\347\272\247\347\212\266\346\200\201\342\200\246"
+  "</p>\n"
   "  </div>\n"
   "</div>\n"
   "<script>\n"
@@ -343,9 +360,22 @@ static const char data__index_html[] =
   ";\n"
   "  if (d.systime) document.getElementById('tm').textContent = d.systime;\n"
   "}).catch(function () {});\n"
-  "function wifiRefresh() {\n"
-  "  fetch('/protocol/wifi/config').then(function (r) { return r.json(); }).then(fu"
-  "nction (j) {\n"
+  "\n"
+  "/* \345\215\207\347\272\247\347\212\266\346\200\201:\345\275\223\345\211\215\350\277\220\350\241\214\346\247\275 / \347\233\256\346\240\207\346\247\275 */\n"
+  "fetch('/protocol/system/ota').then(function (r) { return r.json(); }).then(funct"
+  "ion (j) {\n"
+  "  var d = (j && j.data) ? j.data : {};\n"
+  "  var el = document.getElementById('otaOut');\n"
+  "  if (!el) return;\n"
+  "  if (!d.active_app) { el.textContent = '\345\215\207\347\272\247\347\212\266\346\200\201\350\257\273\345\217\226\345\244\261\350\264\245'; return; }\n"
+  "  el.textContent = '\345\275\223\345\211\215\350\277\220\350\241\214 APP' + d.active_app + '\357\274\214\345\215\207\347\272\247\345\206\231\345\205\245 APP' +\n"
+  "    d.target_slot + '\357\274\210\345\233\236\346\273\232\346\247\275\357\274\211 \357\275\234 \344\270\212\346\254\241\345\215\207\347\272\247 ' +\n"
+  "    (d.staging_len ? d.staging_len + 'B crc=' + (d.staging_crc32 >>> 0).toString"
+  "(16)\n"
+  "                   : '\346\234\252\346\243\200\346\265\213\345\210\260');\n"
+  "}).catch(function () {});\n"
+  "function wifiRefresh() {  fetch('/protocol/wifi/config').then(function (r) { ret"
+  "urn r.json(); }).then(function (j) {\n"
   "    var d = (j && j.data) ? j.data : {};\n"
   "    if (d.ssid != null) {\n"
   "      document.getElementById('ssid').value = d.ssid;\n"

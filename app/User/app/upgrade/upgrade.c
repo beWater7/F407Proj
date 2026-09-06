@@ -15,10 +15,9 @@
   ******************************************************************************
   */
 #include <string.h>
-#include "stm32f4xx.h"
-#include "./internalFlash/bsp_internalFlash.h"
 #include "os_debug.h"
-#include "bsp_spi_flash.h"
+#include "hal_flash.h"
+#include "flash_map.h"
 #if defined(CONFIG_APP_FATFS)
 #include "ff.h"
 #endif
@@ -70,7 +69,7 @@ uint32_t getFlashSector(uint32 len, uint32_t dwStartSector)
         }
         else
         {
-            FLASH_DEBUG("fw too large! len:%lu\n", (unsigned long)len);
+            os_debug("fw too large! len:%lu\n", (unsigned long)len);
         }
         
         if(bySectorSize >= len)
@@ -78,50 +77,50 @@ uint32_t getFlashSector(uint32 len, uint32_t dwStartSector)
         bySectorCount++;
     }
 
-    FLASH_DEBUG("bySectorSize:%lu\n", (unsigned long)bySectorSize);
+    os_debug("bySectorSize:%lu\n", (unsigned long)bySectorSize);
     bySectorCount += dwStartSector;
 
     /* 匹配到扇区对应的sector */
     switch (bySectorCount)
     {
         case 0:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_0);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_0);
             break;
         case 1:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_1);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_1);
             break;
         case 2:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_2);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_2);
             break;
         case 3:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_3);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_3);
             break;
         case 4:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_4);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_4);
             break;
         case 5:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_5);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_5);
             break;
         case 6:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_6);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_6);
             break;
         case 7:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_7);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_7);
             break;
         case 8:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_8);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_8);
             break;
         case 9:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_9);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_9);
             break;
         case 10:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_10);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_10);
             break;
         case 11:
-            uwEndSector = GetSector(ADDR_FLASH_SECTOR_11);
+            uwEndSector = hal_int_flash_get_sector(ADDR_FLASH_SECTOR_11);
             break;
         case 12:
-            uwEndSector = GetSector(FLASH_FW_END_ADDR);
+            uwEndSector = hal_int_flash_get_sector(FLASH_FW_END_ADDR);
             break;
     }
 
@@ -217,10 +216,10 @@ int upgrade_write_fw(uint8 *fw, uint32 len)
 
     os_printf("stOtaFlag.len:%d stOtaFlag.crc32:0x%08x stOtaFlag.active_app:%d\n", stOtaFlag.len, stOtaFlag.crc32, stOtaFlag.active_app);
 #if 0
-    dwFirstSector = GetSector(internal_flash_table[byOtaRegion].start_addr);
+    dwFirstSector = hal_int_flash_get_sector(internal_flash_table[byOtaRegion].start_addr);
     (void)dwFirstSector;
     /* 固件区独占几个完整扇区大小 */
-    dwLastSector = GetSector(internal_flash_table[byOtaRegion].start_addr + internal_flash_table[byOtaRegion].size);
+    dwLastSector = hal_int_flash_get_sector(internal_flash_table[byOtaRegion].start_addr + internal_flash_table[byOtaRegion].size);
     (void)dwLastSector;
 
     FLASH_Unlock();
@@ -244,7 +243,7 @@ int upgrade_write_fw(uint8 *fw, uint32 len)
     }
 
     /* 擦除升级控制分区 */
-    dwFirstSector = GetSector(internal_flash_table[PART_RES].start_addr);
+    dwFirstSector = hal_int_flash_get_sector(internal_flash_table[PART_RES].start_addr);
     (void)dwFirstSector;
     /* VoltageRange_3 以“字(32位)”的大小进行擦除，清除整个扇区的空间 */ 
     if (FLASH_EraseSector(dwFirstSector, VoltageRange_3) != FLASH_COMPLETE)
@@ -413,23 +412,14 @@ int upgrade_commit_ota_flag(uint32 len, uint32 crc32)
 
 void WriteLargeDataToFlash(uint8_t* pData, uint32_t WriteAddr, uint32_t DataSize) {
     while (DataSize > 0) {
-        uint16_t WriteSize = (DataSize > SPI_FLASH_PageSize) ? SPI_FLASH_PageSize : DataSize;
+        uint16_t WriteSize = (DataSize > HAL_SPI_FLASH_PAGE_SIZE) ? HAL_SPI_FLASH_PAGE_SIZE : DataSize;
 
-        SPI_FLASH_BufferWrite(WriteAddr, pData, WriteSize);
+        hal_spi_flash_write(WriteAddr, pData, WriteSize);
 
         WriteAddr += WriteSize;
         pData += WriteSize;
         DataSize -= WriteSize;
     }
-}
-
-
-uint8_t SPI_FLASH_ReadStatusRegister(void) {
-    SPI_FLASH_CS_LOW();
-    SPI_FLASH_SendByte(0x05); // 读取状态寄存器命令
-    uint8_t status = SPI_FLASH_SendByte(0xFF);
-    SPI_FLASH_CS_HIGH();
-    return status;
 }
 
 #define SPIx ((SPI_TypeDef *)SPI1_BASE)

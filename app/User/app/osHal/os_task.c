@@ -3,10 +3,11 @@
  * @brief   :  FreeRTOS 后端实现（仅此文件及 os_hooks.c 应直接 include FreeRTOS）
  ***************************************************************/
 #include "os_task.h"
+#include "hal_cpu.h"
+#include "os_debug.h"
 #include "FreeRTOS.h"
 #include "task.h"
 #include "queue.h"
-#include "stm32f4xx.h"
 
 os_task_handle os_task_spawn(const char *name, os_task_fn_t fn, void *arg,
                              uint16_t stack_words, uint8_t prio)
@@ -81,10 +82,19 @@ uint8_t os_cpu_usage(void)
 {
     TaskStatus_t *task_status;
     UBaseType_t num_tasks;
-    uint32_t total_run_time = 0;
+    configRUN_TIME_COUNTER_TYPE total_run_time = 0;
     uint32_t idle_run_time = 0;
-    uint32_t idle_percent;
     TaskHandle_t idle_handle;
+    static configRUN_TIME_COUNTER_TYPE s_prev_total = 0;
+    static uint32_t s_prev_idle = 0;
+    static TickType_t s_last_ms = 0;
+    static uint8_t s_last_pct = 0;
+    static uint8_t s_armed = 0;   /* 已取过首帧基准 */
+    static uint8_t s_warned = 0;  /* 时间基停摆只告警一次 */
+    uint32_t d_total;
+    uint32_t d_idle;
+    uint32_t idle_pct;
+    uint8_t cur_pct;
 
     num_tasks = uxTaskGetNumberOfTasks();
     if (num_tasks == 0) {
@@ -92,37 +102,76 @@ uint8_t os_cpu_usage(void)
     }
 
     task_status = pvPortMalloc(num_tasks * sizeof(TaskStatus_t));
-    if (!task_status) {
-        return 0;
+    if (task_status == NULL) {
+        return s_last_pct;   /* 尽力而为：分配失败返回上次值 */
+    }
+
+    /* 采样窗口下限 200ms：调用比这更密(web 高频轮询)时直接复用上次结果，
+     * 否则差分窗口太短，占用率会被周期性算成 0 或满格。 */
+    {
+        TickType_t now = xTaskGetTickCount();
+
+        if (s_armed && (TickType_t)(now - s_last_ms) < pdMS_TO_TICKS(200U)) {
+            vPortFree(task_status);
+            return s_last_pct;
+        }
+        s_last_ms = now;
     }
 
     num_tasks = uxTaskGetSystemState(task_status, num_tasks, &total_run_time);
-    if (total_run_time < 100U) {
-        vPortFree(task_status);
-        return 0;
-    }
-
     idle_handle = xTaskGetIdleTaskHandle();
     for (UBaseType_t i = 0; i < num_tasks; i++) {
         if (idle_handle != NULL) {
             if (task_status[i].xHandle == idle_handle) {
-                idle_run_time = task_status[i].ulRunTimeCounter;
+                idle_run_time = (uint32_t)task_status[i].ulRunTimeCounter;
                 break;
             }
         } else if (task_status[i].pcTaskName != NULL &&
                    task_status[i].pcTaskName[0] == 'I' &&
                    task_status[i].pcTaskName[1] == 'D') {
-            idle_run_time = task_status[i].ulRunTimeCounter;
+            idle_run_time = (uint32_t)task_status[i].ulRunTimeCounter;
             break;
         }
     }
     vPortFree(task_status);
 
-    idle_percent = idle_run_time / (total_run_time / 100U);
-    if (idle_percent > 100U) {
-        idle_percent = 100U;
+    if (!s_armed) {
+        /* 首帧只做基准，无窗口可算 */
+        s_prev_total = total_run_time;
+        s_prev_idle = idle_run_time;
+        s_last_pct = 0;
+        s_armed = 1;
+        if (total_run_time == 0 && !s_warned) {
+            s_warned = 1;
+            os_debug("cpu stats: total=0 — run-time timer not running!\r\n");
+        }
+        return 0;
     }
-    return (uint8_t)(100U - idle_percent);
+
+    /* 差分：两次采样间的总时间与 idle 增量（无符号减法自动抗回绕） */
+    d_total = (uint32_t)(total_run_time - s_prev_total);
+    d_idle = idle_run_time - s_prev_idle;
+    s_prev_total = total_run_time;
+    s_prev_idle = idle_run_time;
+
+    if (d_total == 0) {
+        /* 时间基停摆：无新增刻度，读不出占用。首次打印一次便于定位
+         * （历史教训：USB host 曾重配并停掉共享的 TIM2）。 */
+        if (!s_warned) {
+            s_warned = 1;
+            os_debug("cpu stats: timer stalled (total=%lu idle=%lu)\r\n",
+                     (unsigned long)total_run_time, (unsigned long)idle_run_time);
+        }
+        return s_last_pct;
+    }
+
+    idle_pct = d_idle * 100U / d_total;
+    if (idle_pct > 100U) {
+        idle_pct = 100U;
+    }
+    cur_pct = (uint8_t)(100U - idle_pct);
+    s_last_pct = cur_pct;
+    return cur_pct;
 }
 
 os_queue_t os_queue_create(uint32_t length, uint32_t item_size)
@@ -193,5 +242,5 @@ void os_reboot_delay_sec(uint32_t sec)
         sec = 1U;
     }
     vTaskDelay(pdMS_TO_TICKS(sec * 1000U));
-    NVIC_SystemReset();
+    hal_cpu_reset();
 }

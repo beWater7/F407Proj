@@ -9,6 +9,7 @@
 #include "lwip/altcp_tcp.h"
 #include "httpd.h"
 #include "upgrade.h"
+#include "loader_meta.h"
 #include "safe_utils.h"
 #include "os_debug.h"
 #include "flash_manage.h"
@@ -394,7 +395,8 @@ static int fw_find_multipart_payload(char *buf, int len, char **out_payload, u16
     if (len >= (int)sizeof(uint32_t)) {
         uint32_t magic = 0;
         memcpy(&magic, buf, sizeof(magic));
-        if (magic == UPG_HDR_MAGIC || magic == UPG_HDR_MAGIC_DUAL) {
+        if (magic == UPG_HDR_MAGIC || magic == UPG_HDR_MAGIC_DUAL ||
+            magic == UPG_HDR_MAGIC_LDR) {
             if (out_payload) {
                 *out_payload = buf;
             }
@@ -467,6 +469,7 @@ static uint32_t fw_trim_multipart_trailer(char *buf, uint32_t recved, uint32_t e
 typedef enum {
     OTA_ST_HDR = 0,
     OTA_ST_SKIP,
+    OTA_ST_LOADER,
     OTA_ST_FW,
     OTA_ST_WEB,
     OTA_ST_DRAIN,
@@ -477,7 +480,7 @@ typedef enum {
 typedef struct {
     uint8_t active;
     ota_stream_phase_t phase;
-    uint8_t hdr_buf[sizeof(struct upg_header_dual)];
+    uint8_t hdr_buf[sizeof(struct upg_header_ldr)];
     uint8_t hdr_got;
     uint8_t hdr_need;
     uint32_t skip_left;
@@ -493,6 +496,9 @@ typedef struct {
     uint32_t payload_need; /* hdr + all sections */
     uint32_t payload_got;
     uint8_t web_started;
+    uint8_t *loader_buf;
+    uint32_t loader_len;
+    uint32_t loader_got;
 } ota_stream_ctx_t;
 
 static ota_stream_ctx_t s_ota_stream;
@@ -501,6 +507,10 @@ static __EXRAM uint8_t s_ota_web_sector[SECTOR_SIZE];
 
 static void ota_stream_reset(void)
 {
+    if (s_ota_stream.loader_buf) {
+        os_free(s_ota_stream.loader_buf);
+        s_ota_stream.loader_buf = NULL;
+    }
     memset(&s_ota_stream, 0, sizeof(s_ota_stream));
 }
 
@@ -511,6 +521,56 @@ static int ota_stream_parse_header(void)
     uint8_t cur;
 
     memcpy(&magic, st->hdr_buf, sizeof(magic));
+
+    if (magic == UPG_HDR_MAGIC_LDR) {
+        struct upg_header_ldr ldr;
+
+        memcpy(&ldr, st->hdr_buf, sizeof(ldr));
+        if (ldr.fw1_len == 0 || ldr.fw2_len == 0 ||
+            ldr.fw1_len > APP_FLASH_SIZE || ldr.fw2_len > APP_FLASH_SIZE ||
+            ldr.loader_len > (sizeof(loader_header_t) + LOADER_MAX_SIZE)) {
+            os_debug("stream: bad ldr section lens\r\n");
+            return -1;
+        }
+        st->payload_need = sizeof(ldr) + ldr.loader_len + ldr.fw1_len +
+                           ldr.fw2_len + ldr.web_len;
+        st->web_len = ldr.web_len;
+        st->web_left = ldr.web_len;
+        st->loader_len = ldr.loader_len;
+        st->loader_got = 0;
+        if (ldr.loader_len > 0) {
+            st->loader_buf = (uint8_t *)os_malloc(ldr.loader_len);
+            if (st->loader_buf == NULL) {
+                os_debug("stream: loader malloc fail\r\n");
+                return -1;
+            }
+        }
+        cur = ota_get_active_slot();
+        if (cur == 1U) {
+            st->skip_left = 0;
+            st->skip_after_fw = ldr.fw2_len;
+            st->fw_len = ldr.fw1_len;
+            st->fw_left = ldr.fw1_len;
+        } else {
+            st->skip_left = ldr.fw1_len;
+            st->skip_after_fw = 0;
+            st->fw_len = ldr.fw2_len;
+            st->fw_left = ldr.fw2_len;
+        }
+        st->fw_crc_run = crc32_begin();
+        st->web_crc_run = crc32_begin();
+        if (st->loader_len > 0) {
+            st->phase = OTA_ST_LOADER;
+        } else {
+            st->phase = (st->skip_left > 0) ? OTA_ST_SKIP : OTA_ST_FW;
+        }
+        os_printf(KERN_WARN"stream ldr: loader=%lu fw=%lu web=%lu active=APP%u\r\n",
+                  (unsigned long)st->loader_len,
+                  (unsigned long)st->fw_len,
+                  (unsigned long)st->web_len,
+                  (unsigned)(cur + 1U));
+        return 0;
+    }
 
 #if (OTA_MODE == DUAL_APP)
     if (magic == UPG_HDR_MAGIC_DUAL) {
@@ -665,6 +725,33 @@ static int ota_stream_feed(const uint8_t *data, uint32_t len)
             continue;
         }
 
+        if (st->phase == OTA_ST_LOADER) {
+            n = st->loader_len - st->loader_got;
+            if (n > len) {
+                n = len;
+            }
+            if (n > 0 && st->loader_buf) {
+                memcpy(st->loader_buf + st->loader_got, data, n);
+            }
+            st->loader_got += n;
+            data += n;
+            len -= n;
+            st->payload_got += n;
+            if (st->loader_got == st->loader_len) {
+                if (st->loader_len > 0) {
+                    if (upgrade_write_loader(st->loader_buf, st->loader_len) != 0) {
+                        os_debug("stream: loader stage fail\r\n");
+                        st->phase = OTA_ST_ERR;
+                        return -1;
+                    }
+                    os_free(st->loader_buf);
+                    st->loader_buf = NULL;
+                }
+                st->phase = (st->skip_left > 0) ? OTA_ST_SKIP : OTA_ST_FW;
+            }
+            continue;
+        }
+
         if (st->phase == OTA_ST_SKIP) {
             n = st->skip_left;
             if (n > len) {
@@ -803,17 +890,15 @@ static int ota_stream_begin(uint32_t magic_probe)
     ota_stream_reset();
     s_ota_stream.active = 1;
     s_ota_stream.phase = OTA_ST_HDR;
-    if (magic_probe == UPG_HDR_MAGIC_DUAL) {
+    if (magic_probe == UPG_HDR_MAGIC_LDR) {
+        s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header_ldr);
+    } else if (magic_probe == UPG_HDR_MAGIC_DUAL) {
         s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header_dual);
     } else if (magic_probe == UPG_HDR_MAGIC) {
         s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header);
     } else {
         /* 默认按当前模式期望长度；首 4 字节到齐后再校正 */
-#if (OTA_MODE == DUAL_APP)
-        s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header_dual);
-#else
-        s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header);
-#endif
+        s_ota_stream.hdr_need = (uint8_t)sizeof(struct upg_header_ldr);
     }
     os_printf(KERN_WARN"OTA stream fallback ON (need=%u)\r\n",
               (unsigned)s_ota_stream.hdr_need);
@@ -1020,8 +1105,81 @@ uint8_t fw_upgrade(void *conn, char *webFile, int len)
                 uint32_t magic = 0;
                 memcpy(&magic, payload, sizeof(magic));
 
+                /* loader 固件：blob = [loader_header_t][loader.bin]，
+                 * 直接覆盖 SPI PART_LOADER 主区 + 内部 Flash 备份 */
+                if (LOADER_HDR_MAGIC == magic) {
+                    if (0 != upgrade_write_loader((const uint8_t *)payload, useful_len)) {
+                        os_debug("upgrade_write_loader failed\r\n");
+                    } else {
+                        writeLog("loader upgraded");
+                        byOk = 1;
+                    }
+                } else
 #if OTA_FW_WITH_WEB
 #if (OTA_MODE == DUAL_APP)
+                if (UPG_HDR_MAGIC_LDR == magic) {
+                    struct upg_header_ldr ldr = {0};
+                    uint8_t cur;
+                    uint8_t *fw_sel;
+                    uint32_t fw_len;
+                    uint32_t need;
+                    uint32_t crc_got;
+                    uint8_t *body;
+
+                    if (useful_len < sizeof(ldr)) {
+                        os_debug("fw upgrade: ldr header truncated\r\n");
+                    } else {
+                        memcpy_s(&ldr, sizeof(ldr), payload, sizeof(ldr));
+                        need = sizeof(ldr) + ldr.loader_len + ldr.fw1_len +
+                               ldr.fw2_len + ldr.web_len;
+                        os_printf(KERN_REPORT"upg ldr magic:%08x loader:%lu fw1:%lu fw2:%lu web:%lu\r\n",
+                                  ldr.magic,
+                                  (unsigned long)ldr.loader_len,
+                                  (unsigned long)ldr.fw1_len,
+                                  (unsigned long)ldr.fw2_len,
+                                  (unsigned long)ldr.web_len);
+                        if (need > useful_len) {
+                            os_debug("fw upgrade: ldr sizes exceed payload\r\n");
+                        } else {
+                            body = (uint8_t *)payload + sizeof(ldr);
+                            crc_got = crc32_checksum(body, need - sizeof(ldr));
+                            if (crc_got != ldr.crc) {
+                                os_debug("fw upgrade: ldr crc mismatch\r\n");
+                            } else {
+                                if (ldr.loader_len > 0 &&
+                                    0 != upgrade_write_loader(body, ldr.loader_len)) {
+                                    os_debug("upgrade_write_loader failed\r\n");
+                                } else {
+                                    body += ldr.loader_len;
+                                    cur = ota_get_active_slot();
+                                    if (cur == 1U) {
+                                        fw_sel = body;
+                                        fw_len = ldr.fw1_len;
+                                    } else {
+                                        fw_sel = body + ldr.fw1_len;
+                                        fw_len = ldr.fw2_len;
+                                    }
+                                    os_printf(KERN_REPORT"ldr OTA: active=APP%u stage=APP%u len=%lu\r\n",
+                                              (unsigned)(cur + 1U),
+                                              (unsigned)((cur == 1U) ? 1U : 2U),
+                                              (unsigned long)fw_len);
+                                    if (0 != upgrade_write_fw_v2(fw_sel, fw_len)) {
+                                        os_debug("upgrade_write_fw_v2 failed\r\n");
+                                    } else {
+                                        if (ldr.web_len > 0) {
+                                            if (0 != upgrade_web(body + ldr.fw1_len + ldr.fw2_len,
+                                                                 ldr.web_len)) {
+                                                os_debug("upgrade_web failed (fw meta already written)\r\n");
+                                            }
+                                        }
+                                        writeLog("fw upgrade ldr");
+                                        byOk = 1;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                } else
                 if (UPG_HDR_MAGIC_DUAL == magic) {
                     struct upg_header_dual dual = {0};
                     uint8_t cur;

@@ -11,12 +11,12 @@
 #include "httpd.h"
 #include "os_mutex.h"
 #include "flash_manage.h"
+#include "upgrade.h"
 #include "node_tree.h"
 #include "log.h"
 #include "devConfig.h"
 #if defined(CONFIG_APP_ESP8266)
-#include "bsp_esp8266.h"
-#include "bsp_esp8266_test.h"
+#include "drv_esp8266.h"
 #endif
 #include "sntp_api.h"
 #include "log.h"
@@ -206,6 +206,67 @@ int systemConfig(void *conn, void *args)
 {
     printf("[%s:%d]\n",__FUNCTION__,__LINE__);
     return HTTP_OK;
+}
+
+/* GET /protocol/system/ota  — 升级状态(裁包/差分的地基)
+ * 返回当前运行槽 active、新固件应写入的目标槽 target、以及 staging
+ * (上次 upgrade 写入 PART_APP1 的镜像)长度/CRC32。
+ * 用途: host 据此"只发对侧槽那份"(裁包), 差分时用对侧槽旧版做 base 校验。
+ * 数据源: ota_flag_t(PART_OTA) + ota_get_active_slot()。
+ */
+static int read_slot_state(uint32_t *len_out, uint32_t *crc_out)
+{
+    uint32_t crc = 0;
+
+    /* 分区表里 PART_APP1 即"staging 写入区"；镜像长度由 ota_flag.len 记录 */
+    ota_flag_t flag;
+    memset(&flag, 0, sizeof(flag));
+    SPI_FLASH_READ(PART_OTA, 0, (uint8_t *)&flag, sizeof(flag));
+
+    if (len_out) {
+        *len_out = (flag.magic == OTA_FLAG_MAGIC) ? flag.len : 0;
+    }
+    if (crc_out) {
+        if (flag.magic == OTA_FLAG_MAGIC) {
+            /* ota_flag 记的是 staging 的 crc;若为 0 或 magic 异常,退回读扇区算 */
+            crc = flag.crc32;
+        }
+        *crc_out = crc;
+    }
+    return (flag.magic == OTA_FLAG_MAGIC) ? 0 : -1;
+}
+
+int systemOtaStatus(void *conn, void *args)
+{
+    cJSON *data = NULL;
+    struct http_state *hs = NULL;
+    uint8_t active;
+    uint8_t target;
+    uint32_t slot_len = 0;
+    uint32_t slot_crc = 0;
+    int have_flag = 0;
+
+    (void)args;
+    hs = (struct http_state *)conn;
+    CUSTOM_ASSERT(NULL == hs, return HTTP_BAD_REQUEST);
+
+    active = ota_get_active_slot();   /* 0=APP1, 1=APP2 */
+    target = (uint8_t)(1U - active);  /* 升级写入的是对侧槽 */
+
+    data = cJSON_CreateObject();
+    if (!data) {
+        return HTTP_BAD_REQUEST;
+    }
+
+    have_flag = read_slot_state(&slot_len, &slot_crc);
+    (void)have_flag;
+
+    cJSON_AddNumberToObject(data, "active_app", active + 1);       /* 1 或 2 */
+    cJSON_AddNumberToObject(data, "target_slot", target + 1);      /* 1 或 2 */
+    cJSON_AddNumberToObject(data, "staging_len", (double)slot_len);
+    cJSON_AddNumberToObject(data, "staging_crc32", (double)slot_crc);
+
+    return protocol_send_json(hs, HTTP_OK, "ok", data);
 }
 
 int systemInfo(void *conn, void *args)
@@ -525,6 +586,7 @@ static node_t log[] = {
 static node_t systems[] = {
     {"config", systemConfig, root_node, NULL, METHOD_GET, NULL},
     {"info", systemInfo, root_node, NULL, METHOD_GET, NULL},
+    {"ota", systemOtaStatus, root_node, NULL, METHOD_GET, NULL},
     {"/system", NULL, NULL, NULL, METHOD_GET, NULL},
 };
 

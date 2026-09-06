@@ -1,18 +1,12 @@
-#include "stm32f4xx.h"
-#include "bsp_led.h"
-#include "key_led.h"
-#include "bsp_key.h"
-#include "bsp_systick.h"
-#include "bsp_usart.h"
-#include "bsp_spi_flash.h"
-#include "bsp_internalFlash.h"
+#include "hal_board.h"
+#include "hal_led.h"
+#include "hal_key.h"
+#include "hal_flash.h"
+#include "hal_eth.h"
+#include "hal_cpu.h"
 //#include "ff.h"
-#include "bsp_sram.h"
-//#include "malloc.h"
 #include "lwip/tcp.h"
 #include "netconf.h"
-#include "stm32f4x7_phy.h"
-#include "bsp_rtc.h"
 //#include "myTaskSchedule.h"
 #include "lwip/dns.h"
 #include "lwip/icmp.h"
@@ -28,12 +22,13 @@
 #include "rx_data_queue.h"
 #include "flash_manage.h"
 #include "os_debug.h"
+#include "os_log.h"
 //#include "lwip/ping.h"
 #include "devConfig.h"
 #include "dev_manage.h"
 #include "shell_control.h"
 #if defined(CONFIG_APP_DHT11)
-#include "bsp_dht11.h"
+#include "drv_dht11.h"
 #endif
 #include "log.h"
 #include "export.h"
@@ -43,12 +38,14 @@
 #include "multi_button.h"
 #endif
 #if defined(CONFIG_APP_ESP8266)
-#include "bsp_esp8266.h"
-#include "bsp_esp8266_test.h"
+#include "drv_esp8266.h"
 #endif
-#include "core_delay.h"
+#if defined(CONFIG_APP_USB_HOST)
+#include "usb_host.h"
+#endif
 #include "crc.h"
 #include "httpd.h"
+#include "dts.h"
 #if defined(CONFIG_APP_TELNET)
 #include "telnet.h"
 #endif
@@ -56,11 +53,10 @@
 #include "netconf.h"
 #include "sntp_api.h"
 #include "os_task.h"
-#include "bsp_timer.h"
 #include "upgrade.h"
 #include "malloc.h"
 
-#define SOFT_VERSION_LOCAL "V1.0.0"
+#define SOFT_VERSION_LOCAL "V2.0.0"
 
 /* ?????????, ????????????, ???��???????????????????????????? */
 
@@ -78,12 +74,12 @@ __attribute__((aligned(8))) uint8_t ucHeap[ configTOTAL_HEAP_SIZE ];
 
 static uint8_t g_byDHCPEnabled = 0;
 
-__IO uint32_t LocalTime = 0; /* this variable is used to create a time reference incremented by 10ms */
+volatile uint32_t LocalTime = 0; /* this variable is used to create a time reference incremented by 10ms */
 
 extern struct netif gnetif;
 
 #ifdef USE_DHCP
-extern __IO uint8_t DHCP_state;
+extern volatile uint8_t DHCP_state;
 #endif
 
 uint8_t byWebUpgrade = 1;
@@ -121,21 +117,25 @@ typedef enum{
 }STORAGE_INDEX_EN;
 
 
-/*0-0x600000 ???6M????, ?????10M??? */
+/*0x000000~0x020000 归 loader（主区+staging），0x600000 起为 app 区 */
 STORAGE_PART_INFO_T spi_flash_table[] = {
+    [PART_LOADER]   = { "loader",    0x000000,  64 * 1024,  PART_CRCCHECK_EN},
+    [PART_LOADER_BK]= { "loader_bk", 0x010000,  64 * 1024,  PART_CRCCHECK_EN},
     [PART_APP1]   = { "app1",       0x600000,  2 * 1024 * 1024,  PART_CRCCHECK_EN},
     [PART_APP2]   = { "app2",       0x800000,  2 * 1024 * 1024,  PART_CRCCHECK_EN},
     [PART_OTA]    = { "ota_info",   0xa00000,  1 * 1024 * 1024,  PART_CRCCHECK_EN},
     [PART_LOG]    = { "log",        0xb00000,  2 * 1024 * 1024},
     [PART_WEB]    = { "web",        0xd00000,  1 * 1024 * 1024,  PART_CRCCHECK_EN},
     [PART_CONFIG] = { "config",     0xe00000,  1 * 1024 * 1024,  PART_CRCCHECK_EN},
-    [PART_CUSTOM] = { "custom",     0xf00000,  1 * 1024 * 1024}  // ???
+    /* dtb 保留区 0xF00000~0xF03FFF (主槽/备份槽 各4KB) 归 dts 模块, 不占分区索引;
+     * custom 从 0xF04000 起, 大小 1MB - 16KB (与 f407zg.dts 一致) */
+    [PART_CUSTOM] = { "custom",     0xf04000,  (1 * 1024 * 1024) - (16 * 1024),  0}
 };
 
 STORAGE_HW_OPS_T spi_flash_ops = {
-    .hw_read  = SPI_FLASH_BufferRead,
-    .hw_write = SPI_FLASH_BufferWrite,
-    .hw_erase = SPI_FLASH_SectorErase,
+    .hw_read  = hal_spi_flash_read,
+    .hw_write = hal_spi_flash_write,
+    .hw_erase = hal_spi_flash_erase_sector,
 };
 
 #define SPIFLASH_PART_NUM (sizeof(spi_flash_table)/sizeof(spi_flash_table[0]))
@@ -153,9 +153,9 @@ STORAGE_PART_INFO_T internal_flash_table[] = {
 
 
 STORAGE_HW_OPS_T internal_flash_ops = {
-    .hw_read  = internal_flash_read,
-    .hw_write = internal_flash_write,
-    .hw_erase = internal_flash_erase,
+    .hw_read  = hal_int_flash_read,
+    .hw_write = hal_int_flash_write,
+    .hw_erase = hal_int_flash_erase,
 };
 
 #define INTERNALFLASH_PART_NUM (sizeof(internal_flash_table)/sizeof(internal_flash_table[0]))
@@ -184,14 +184,14 @@ const int h_magic = 0x56781234;
 
 int stack_set_guard(void)
 {
-    __disable_irq();
+    hal_cpu_irq_disable();
 
-    int* msp = (int *)__get_MSP();
+    int* msp = (int *)hal_cpu_get_msp();
     int* base = &__stack_base;
 
     printf("%p, %p\n", msp, base);
     if(msp < base) {
-    		__enable_irq();
+    		hal_cpu_irq_enable();
     		return -1;
     }
     		
@@ -199,7 +199,7 @@ int stack_set_guard(void)
     for( ; base != msp; base++)
     		*base = s_magic;
 
-    __enable_irq();
+    hal_cpu_irq_enable();
 
     return (uint32_t)msp - (uint32_t)&__stack_base;
 }
@@ -207,13 +207,13 @@ int stack_set_guard(void)
 
 int stack_detect_guard(void)
 {
-    __disable_irq();
+    hal_cpu_irq_disable();
 
-    int* msp = (int *)__get_MSP();
+    int* msp = (int *)hal_cpu_get_msp();
     int* base = &__stack_base;
 
     if(msp < base || *base != s_magic) {
-    		__enable_irq();
+    		hal_cpu_irq_enable();
     		return -1;
     }
 
@@ -222,7 +222,7 @@ int stack_detect_guard(void)
     				break;
     }
 
-    __enable_irq();
+    hal_cpu_irq_enable();
 
     return (uint32_t)base - (uint32_t)&__stack_base;
 }
@@ -235,11 +235,11 @@ void vApplicationIdleHook(void)
     // ????????????????????????????
     idle_counter++;
     /* 看门狗在空闲任务里喂：任何忙等循环都必须让出 CPU 让 idle 运行 */
-    IWDG_ReloadCounter();
+    hal_board_feed_watchdog();
 }
 
 /* ????????????? */
-void Delay(__IO uint32_t nCount)
+void Delay(volatile uint32_t nCount)
 {
     for(; nCount != 0; nCount--);
 }
@@ -298,6 +298,11 @@ void spi_flash_region_init(void)
      * 以前 byManage 默认为 0，写入不偏移、不更新头 → boot 读 APP1 偏移错位且 used_size=0，OTA 不生效。 */
     g_stSpiFlashPart.byManage = 1;
 
+    /* DTS: 分区表优先读 SPI flash 中的动态 dtb, 失败回落固件内置静态表。
+     * 表内 addr/size/flags 会被 dts 覆盖; dts 未描述的分区保持代码默认。 */
+    dts_load_default();
+    dts_apply_partitions();
+
     FlashPartition_Init(&g_stSpiFlashPart, spi_flash_table, SPIFLASH_PART_NUM, &spi_flash_ops);
 }
 
@@ -340,7 +345,7 @@ void partition_info_show(void)
     if (g_stSpiFlashPart.byManage) {
         for(i = 0; i < SPI_FLASH_PART_MAX; i++)
         {
-            SPI_FLASH_BufferRead(spi_flash_table[i].start_addr, (uint8_t *)&hdr, sizeof(PartitionHeader));
+            hal_spi_flash_read(spi_flash_table[i].start_addr, (uint8_t *)&hdr, sizeof(PartitionHeader));
 
             calc_crc = crc32_checksum((uint8_t *)&hdr, sizeof(hdr) - sizeof(hdr.crc));
 
@@ -397,16 +402,15 @@ static void Network_task(void *arg)
     FOREVER
     {
         /* FreeRTOS 路径原先不调 LwIP_Periodic_Handle，链路后插无法恢复 */
-        ETH_CheckLinkStatus(ETHERNET_PHY_ADDRESS);
+        hal_eth_check_link();
         if (diag_cnt < 5)
         {
             #if 0
-            extern __IO uint32_t EthStatus;
-            uint16_t bsr = ETH_ReadPHYRegister(ETHERNET_PHY_ADDRESS, PHY_BSR);
+            uint16_t bsr = hal_eth_read_phy(0x01);
             printf("ETH diag: up=%d link=%d EthStatus=0x%lx BSR=0x%04x IP=%d.%d.%d.%d\n",
                    netif_is_up(&gnetif) ? 1 : 0,
                    netif_is_link_up(&gnetif) ? 1 : 0,
-                   (unsigned long)EthStatus,
+                   (unsigned long)hal_eth_get_status(),
                    (unsigned)bsr,
                    (int)ip4_addr1(&gnetif.ip_addr), (int)ip4_addr2(&gnetif.ip_addr),
                    (int)ip4_addr3(&gnetif.ip_addr), (int)ip4_addr4(&gnetif.ip_addr));
@@ -431,26 +435,12 @@ static void Network_task(void *arg)
 }
 
 
-uint8_t read_button_gpio(uint8_t button_id);
-
-static void test_task(void *arg) __attribute__((unused));
-static void test_task(void *arg)
-{
-    FOREVER
-    {
-        printf("key1 status:%d\n", read_button_gpio(1));
-        printf("key2 status:%d\n", read_button_gpio(2));
-        os_sleep_ms(500);
-    }
-}
-
-
 uint8_t key1_input_func(void) {
-    return Key_Scan(KEY1_GPIO_PORT, KEY1_GPIO_PIN);
+    return hal_key_is_pressed(HAL_KEY_1);
 }
 
 uint8_t key2_input_func(void) {
-    return Key_Scan(KEY2_GPIO_PORT, KEY2_GPIO_PIN);
+    return hal_key_is_pressed(HAL_KEY_2);
 }
 
 uint32_t time_input_func(void) {
@@ -504,7 +494,7 @@ static void ETH_CheckFrameReceived_task(void *arg)
     while(1) 
     {
         #if 1
-        ETH_CheckFrameReceived();
+        hal_eth_check_frame_received();
 
         /* ??????????????????????????????��????CPU???
          * pdMS_TO_TICKS(ms): ms ????> ????
@@ -515,7 +505,7 @@ static void ETH_CheckFrameReceived_task(void *arg)
         // ????��????????1?????????
         if (os_sem_take(eth_rx_sem, pdMS_TO_TICKS(1000)) == pdTRUE)
         {
-            ETH_CheckFrameReceived(); // ???????????????
+            hal_eth_check_frame_received(); // ???????????????
         }
         else
         {
@@ -542,12 +532,8 @@ static void sysInfo_task(void *arg)
 
 
 /**
-  * @brief  TIM3 由 bsp_timer.c 统一提供（TIM3_init / TIM3_IRQHandler）
+  * @brief  TIM3 由 hal_board_f4.c 统一封装（hal_board_delay_ms）
   */
-void sleep_10ms(u32 mTime)
-{
-    TIM3_sleep_10ms(mTime);
-}
 
 
 void hard_fault_handler_c(uint32_t *stack)
@@ -583,10 +569,9 @@ void hard_fault_handler_c(uint32_t *stack)
     {
         volatile uint32_t d;
         for (d = 0; d < 3000000U; d++) {
-            __NOP();
         }
     }
-    NVIC_SystemReset();
+    hal_board_reboot();
     while (1);  // 复位失败才走到这里
 }
 
@@ -599,61 +584,17 @@ void hard_fault_handler_c(uint32_t *stack)
  * @retval   ${5:??}
  *****************************************************/
 /*****************************************************
- * @fn       bsp_iwdg_init
+ * @fn       board_iwdg_init
  * @brief    独立看门狗：HardFault/死循环时 ~8s 自动复位
- * @note     喂狗在 vApplicationIdleHook（空闲任务）；阻塞式 sleep
- *           期间空闲任务会运行，不会误复位。
+ * @note     已迁移至 hal_board_f4.c（hal_board_init 内统一初始化）
  *****************************************************/
-static void bsp_iwdg_init(void)
+
+void board_init(void)
 {
-    /* LSI ~32kHz，128 分频 → 250Hz；reload 2000 → 8s 超时 */
-    RCC_LSICmd(ENABLE);
-    while (RCC_GetFlagStatus(RCC_FLAG_LSIRDY) == RESET) {
-    }
-    IWDG_WriteAccessCmd(IWDG_WriteAccess_Enable);
-    IWDG_SetPrescaler(IWDG_Prescaler_128);
-    IWDG_SetReload(2000);
-    IWDG_ReloadCounter();
-    IWDG_Enable();
-}
+    /* 串口/LED/按键/时基/RTC/PSRAM/SPI Flash/看门狗 等硬件初始化 */
+    hal_board_init();
 
-void board_bsp_init(void)
-{
-    /* ????????? */
-    Debug_USART_Config();
-
-    /* ?????RGB?? */
-    LED_GPIO_Config();
-
-    /* ????????? */
-    Key_GPIO_Config();
-
-    /* ??????? */
-    SysTick_Init();
-
-    TIM3_init();
-
-    rtc_init();
-
-    /* 外部 PSRAM：其它模块仍可能用 EXRAM，必须在网络/调试缓冲之前初始化 FSMC */
-    FSMC_SRAM_Init();
-
-    /* 16M SPI flash W25Q128 */
-    SPI_FLASH_Init();
-    {
-        uint32_t id = SPI_FLASH_ReadID();
-        os_printf(KERN_WARN"SPI Flash JEDEC ID=0x%06lX %s\r\n",
-                  (unsigned long)id,
-                  (id == sFLASH_ID) ? "OK" : "UNEXPECTED");
-    }
-
-    /* DWT 供 DHT11 等微秒延时；DHT11_Init 延后到首次读取，避免影响启动 */
-    CPU_TS_TmrInit();
-
-    /* 最后使能看门狗：前面的初始化都是线性执行，8s 窗口足够 */
-    bsp_iwdg_init();
-
-    os_printf(KERN_WARN"board bsp init success %s\r\n",__DATE__);
+    LOGR(LOG_MOD_SYS, "board bsp init success %s\r\n", __DATE__);
 
     return;
 }
@@ -671,7 +612,7 @@ void network_init()
     /*????????????��???? (GPIOs, clocks, MAC, DMA)
      *??????????????????��?, ??????��??????, ????
      */
-    ETH_BSP_Config();
+    hal_eth_config();
 
     /* ?????��?????tcpip_thread */
     tcpip_init(NULL, NULL);
@@ -682,14 +623,14 @@ void network_init()
     /* ????????????????????????????freeRTOS???????��?????128(??????) */
     os_task_spawn("check_Ethframe_task", ETH_CheckFrameReceived_task, NULL, 256, TASK_PRIORITY_HIGH);
 
-    os_printf(KERN_WARN"eth driver init!\r\n");
+    LOGR(LOG_MOD_SYS, "eth driver init\r\n");
 }
 
 
 void network_app_init(void)
 {
 #if defined(CONFIG_APP_SNTP)
-    bsp_sntp_init();
+    sntp_api_init();
 #endif
     /* webserver Init */
     httpd_init();
@@ -700,12 +641,12 @@ void network_app_init(void)
     telnet_server_init();
 #endif
 
-    os_printf(KERN_WARN"network app init!\r\n");
+    LOGR(LOG_MOD_SYS, "network app init\r\n");
 }
 
 
 /* GCC: Reset_Handler 直接调 main；Keil: 用 $Sub$$main 拦截 main。
- * 无论哪种工具链，都必须先 board_bsp_init（串口/TIM3），再起 FreeRTOS，
+ * 无论哪种工具链，都必须先 board_init（串口/TIM3），再起 FreeRTOS，
  * 否则 --gc-sections 会把未引用的 BSP 初始化整段丢掉，printf 全无输出。 */
 #if !(defined(__CC_ARM) || defined(__ARMCC_VERSION))
 static int app_main(void);
@@ -728,18 +669,18 @@ int $Sub$$main(void)
 int main(void)
 #endif
 {
-    board_bsp_init();
-    __enable_irq();
-    printf("start FreeRTOS...\r\n");
+    board_init();
+    hal_cpu_irq_enable();
+
     if (os_task_spawn("main", main_task_entry, NULL, 512, 4) == NULL) {
         printf("create main task fail!\r\n");
         while (1) { }
     }
-    printf("main task ok, start scheduler\r\n");
+
     os_scheduler_start();
-    printf("vTaskStartScheduler returned!\r\n");
+    os_debug("vTaskStartScheduler returned!\r\n");
     while (1) {
-        sleep_10ms(10);
+        hal_board_delay_ms(100);
     }
 }
 /* test code for mutex */    
@@ -828,8 +769,8 @@ void getBuildDate(char *buildInfo)
     {
         os_printf("build time: %04u%02u%02u %s  VTOR=0x%08lx %s\n",
                   fullYear, mon, day, __TIME__,
-                  (unsigned long)SCB->VTOR,
-                  (SCB->VTOR == 0x08060000UL) ? "(APP2)" : "(APP1)");
+                  (unsigned long)hal_cpu_get_vtor(),
+                  (hal_cpu_get_vtor() == 0x08060000UL) ? "(APP2)" : "(APP1)");
     }
 }
 
@@ -870,7 +811,7 @@ static void mqtt_data_send_task(void* parameter)
             }
         }
 
-        LED1_TOGGLE;
+        hal_led_toggle(HAL_LED_1);
         os_sleep(1);
     }
 }
@@ -924,10 +865,10 @@ uint8_t read_button_gpio(uint8_t button_id)
     switch (button_id) {
         case 1:
             //return btn1_state;
-            return Key_Scan(KEY1_GPIO_PORT, KEY1_GPIO_PIN);
+            return hal_key_is_pressed(HAL_KEY_1);
         case 2:
             //return btn2_state;
-            return Key_Scan(KEY2_GPIO_PORT, KEY2_GPIO_PIN);
+            return hal_key_is_pressed(HAL_KEY_2);
         default:
             return 0;
     }
@@ -1024,7 +965,7 @@ int main(void)
 static int app_main(void)
 #endif
 {
-    uint32_t vtor = SCB->VTOR;
+    uint32_t vtor = hal_cpu_get_vtor();
     uint32_t slot;
 
     if (vtor == APP2_ADDRESS) {
@@ -1034,11 +975,9 @@ static int app_main(void)
     } else {
         slot = 0; /* 未知 */
     }
-    printf("APP running! VTOR=0x%08lX slot=APP%lu (APP1=0x%08lX APP2=0x%08lX) fn=0x%08lX\r\n",
+    os_printf("VTOR=0x%08lX slot=APP%lu  fn=0x%08lX\r\n",
            (unsigned long)vtor,
            (unsigned long)slot,
-           (unsigned long)APP1_ADDRESS,
-           (unsigned long)APP2_ADDRESS,
            (unsigned long)(uint32_t)(void *)app_main);
     xplat_run();
     /* ????shell cmd ???? */
@@ -1056,7 +995,7 @@ static int app_main(void)
 
     //sys_thread_new("key_event", key_event_task, NULL, 128, TASK_PRIORITY_NORMAL);
 
-    //sys_thread_new("test", test_task, NULL, 128, TASK_PRIORITY_NORMAL);
+    // sysInfo 任务暂不启用
 #if 0 /* test code for mutex */
     os_mutex_init(lock);
     /* ????shell cmd ???? */
@@ -1085,18 +1024,19 @@ static int app_main(void)
         ota_register_background_task(h);
     }
 #endif
-    os_printf(KERN_WARN"APP init success\r\n");
+    LOGR(LOG_MOD_SYS, "APP init success\r\n");
     getBuildDate(NULL);
-#ifdef SOFT_VERSION
-    os_printf("333soft version:%d\n", SOFT_VERSION);
-#else
-    os_printf(KERN_WARN"333soft version:%s\n", SOFT_VERSION_LOCAL);
-#endif
+    LOGR(LOG_MOD_SYS, "soft version:%s\r\n", SOFT_VERSION_LOCAL);
 
 #if defined(CONFIG_APP_ESP8266)
 	ESP8266_Init();
 
     os_task_spawn("esp8266_recv", esp8266_recv_task, NULL, 1024, TASK_PRIORITY_NORMAL);
+#endif
+
+#if defined(CONFIG_APP_USB_HOST)
+	usb_host_init();
+    os_task_spawn("usb_host", usb_host_task, NULL, 1024, TASK_PRIORITY_NORMAL);
 #endif
     // SPI_FLASH_ERASE_ALL(PART_WEB);
 

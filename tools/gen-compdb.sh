@@ -1,5 +1,5 @@
 #!/bin/sh
-# 为 app / bootloader 分别生成 compile_commands.json（bear）
+# 为 app / loader / boot 分别生成 compile_commands.json（bear）
 # 两套库互不合并，clangd 按当前文件所在树跳转，避免同名函数串到另一边。
 set -e
 
@@ -26,5 +26,6 @@ gen_one() {
 }
 
 gen_one app build/app1.elf
-gen_one bootloader build/loader.elf
+gen_one loader build/loader.elf
+gen_one boot build/boot.elf
 echo "compdb ok. Reload clangd window if the editor is already open."

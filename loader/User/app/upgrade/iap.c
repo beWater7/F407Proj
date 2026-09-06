@@ -1,0 +1,533 @@
+#include "iap.h"
+#include <stdio.h>
+#include <string.h>
+#include "upgrade.h"
+#include "flash_manage.h"
+#include "bsp_led.h"
+
+/*********************************************************************
+  +----------------------------+
+  |         FLASH              |
+  |   (�� .sct/.ld ����)       |
+  |                            |
+  |  0x08000000  +-------------+   --> ����������ַ (VTOR)
+  |               | MSP ��ֵ   | --> *(0x08000000) = 0x20020000 (SRAM��)
+  |  0x08000004  +-------------+
+  |               | Reset_Handler ��ַ |
+  |  0x08000008  +-------------+
+  |               | �����ж���� ...   |
+  +----------------------------+
+
+                 ��
+          ����ʱӲ������
+-------------------------------------------
+  PC = *(VTOR + 0x04)  --> Reset_Handler
+  MSP = *(VTOR + 0x00) --> ջ��
+  VTOR = ����������ַ   --> 0x08000000
+
+  (���Bootloader��תApp����)
+  SCB->VTOR = App��ʼ��ַ
+  __set_MSP(*(App��ʼ��ַ))
+-------------------------------------------
+
+  +----------------------------+
+  |         SRAM               |
+  |                            |
+  |  0x20020000  +-------------+   --> ʵ��ջ����ַ (MSP)
+  +----------------------------+
+
+
+
+����������:
+
+__Vectors       DCD     __initial_sp               ; Top of Stack
+                DCD     Reset_Handler              ; Reset Handler
+                DCD     NMI_Handler                ; NMI Handler
+                DCD     HardFault_Handler          ; Hard Fault Handler
+                DCD     MemManage_Handler          ; MPU Fault Handler
+                DCD     BusFault_Handler           ; Bus Fault Handler
+                DCD     UsageFault_Handler         ; Usage Fault Handler
+
+                ...
+
+
+**********************************************************************/
+#define BOOT_VERSION "V2.0.0"
+
+/* EAZY BOOT — 纯 ASCII，串口等宽对齐 */
+static const char boot_logo[] =
+"\r\n"
+"    _____   _     _____  __   __     ____    ___    ___   _____\r\n"
+"   | ____| / \\   |__  /  \\ \\ / /    | __ )  / _ \\  / _ \\ |_   _|\r\n"
+"   |  _|  / _ \\    / /    \\ V /     |  _ \\ | | | || | | |  | |\r\n"
+"   | |___/ ___ \\  / /_     | |      | |_) || |_| || |_| |  | |\r\n"
+"   |_____/_/   \\_/____|    |_|      |____/  \\___/  \\___/   |_|\r\n"
+"\r\n";
+
+void show_boot_info(void)
+{
+    ota_printf("%s", boot_logo);
+    BOOTL_PRINT(KERN_REPORT"          %s            %s %s\r\n", BOOT_VERSION, __DATE__, __TIME__);
+    ota_printf("\r\n");
+    /* full partition layout is printed by partition_info_show()
+     * after both flash media are initialized */
+    BOOTL_PRINT(BOOT_INFO"loading storage & checking OTA...\r\n");
+}
+
+typedef void (*jump_callback)(void);
+
+/**
+ * @brief  校验指定基址是否有可跳转的 APP 镜像
+ * @note   要求：MSP 落在内部 SRAM；Reset_Handler 为 Thumb 且落在本 bank 内。
+ *         因此「把 APP1 链接产物原样拷到 APP2」会被判定非法——Reset 仍指向 0x08008xxx。
+ *         真双区需要 APP2 单独以 0x08060000 为 ORIGIN 链接。
+ */
+uint8_t app_image_valid(uint32_t app_addr)
+{
+    uint32_t msp;
+    uint32_t reset;
+
+    if ((app_addr != APP1_ADDRESS) && (app_addr != APP2_ADDRESS)) {
+        return 0;
+    }
+
+    msp = *(volatile uint32_t *)app_addr;
+    reset = *(volatile uint32_t *)(app_addr + 4U);
+
+    if (msp < 0x20000000u || msp > 0x20020000u) {
+        return 0;
+    }
+    /* Thumb 入口 bit0 必须为 1 */
+    if ((reset & 1U) == 0U) {
+        return 0;
+    }
+    reset &= ~1U;
+    if (reset < app_addr || reset >= (app_addr + APP_FLASH_SIZE)) {
+        return 0;
+    }
+    return 1;
+}
+
+/**
+ * @brief  按 OTA active_app 选择跳转地址，无效则回退另一 bank / APP1
+ */
+uint32_t boot_resolve_app_addr(void)
+{
+    ota_flag_t stOtaFlag = {0};
+    uint32_t preferred;
+    uint32_t other;
+
+#if OTA_REGION_SPI_FLASH
+    SPI_FLASH_READ(PART_OTA, 0, (uint8_t *)&stOtaFlag, sizeof(stOtaFlag));
+#else
+    INTERNAL_FLASH_READ(PART_RES, 0, (uint8_t *)&stOtaFlag, sizeof(stOtaFlag));
+#endif
+
+    /* active_app: 0=APP1, 1=APP2；无有效 magic 时默认 APP1 */
+    if (stOtaFlag.magic == OTA_FLAG_MAGIC && stOtaFlag.active_app == 1U) {
+        preferred = APP2_ADDRESS;
+        other = APP1_ADDRESS;
+    } else {
+        preferred = APP1_ADDRESS;
+        other = APP2_ADDRESS;
+    }
+
+    BOOTL_PRINT(BOOT_INFO"boot select: active_app=%lu prefer=0x%08lx\n",
+                (unsigned long)stOtaFlag.active_app,
+                (unsigned long)preferred);
+
+    if (app_image_valid(preferred)) {
+        return preferred;
+    }
+    BOOTL_PRINT(BOOT_WARN"prefer bank invalid, try 0x%08lx\n", (unsigned long)other);
+    if (app_image_valid(other)) {
+        return other;
+    }
+    /* 不再假装 APP1 可用：返回 0 让 main 留在 boot */
+    BOOTL_PRINT(BOOT_ERROR"no valid APP image\n");
+    return 0;
+}
+
+/**
+ * @note 跳转到 App 程序
+ *
+ * @param App起始地址
+ *
+ * @return 1 已跳转（正常不会返回） 0 镜像非法
+ */
+uint8_t jump_app(uint32_t app_addr)
+{
+    uint32_t jump_addr;
+    uint32_t msp;
+    jump_callback cb;
+
+    if (!app_image_valid(app_addr)) {
+        BOOTL_PRINT(BOOT_ERROR"jump_app: invalid image @0x%08lx\n",
+                    (unsigned long)app_addr);
+        return 0;
+    }
+
+    msp = *(volatile uint32_t *)app_addr;
+    jump_addr = *(volatile uint32_t *)(app_addr + 4U);
+    cb = (jump_callback)jump_addr;
+
+    /* 必须先切 VTOR，再跳 APP；否则 APP 里 svc/PendSV/外设中断仍进 Boot 向量表。
+     * 跳转前保持关中断：Boot 外设可能仍有 pending，开中断会在 APP 未初始化时取 APP 向量 SoftFault。 */
+    __disable_irq();
+    SCB->VTOR = app_addr;
+    __DSB();
+    __ISB();
+
+    __set_MSP(msp);
+
+    cb(); /* 不返回；由 APP 自己在就绪后 __enable_irq() */
+
+    return 1;
+}
+
+
+#if 0
+/**
+  * @brief  Gets the sector of a given address
+  * @param  None
+  * @retval The sector of a given address
+  */
+uint32_t GetSector(uint32_t Address)
+{
+  uint32_t sector = 0;
+  
+  if((Address < ADDR_FLASH_SECTOR_1) && (Address >= ADDR_FLASH_SECTOR_0))
+  {
+    sector = FLASH_Sector_0;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_2) && (Address >= ADDR_FLASH_SECTOR_1))
+  {
+    sector = FLASH_Sector_1;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_3) && (Address >= ADDR_FLASH_SECTOR_2))
+  {
+    sector = FLASH_Sector_2;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_4) && (Address >= ADDR_FLASH_SECTOR_3))
+  {
+    sector = FLASH_Sector_3;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_5) && (Address >= ADDR_FLASH_SECTOR_4))
+  {
+    sector = FLASH_Sector_4;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_6) && (Address >= ADDR_FLASH_SECTOR_5))
+  {
+    sector = FLASH_Sector_5;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_7) && (Address >= ADDR_FLASH_SECTOR_6))
+  {
+    sector = FLASH_Sector_6;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_8) && (Address >= ADDR_FLASH_SECTOR_7))
+  {
+    sector = FLASH_Sector_7;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_9) && (Address >= ADDR_FLASH_SECTOR_8))
+  {
+    sector = FLASH_Sector_8;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_10) && (Address >= ADDR_FLASH_SECTOR_9))
+  {
+    sector = FLASH_Sector_9;  
+  }
+  else if((Address < ADDR_FLASH_SECTOR_11) && (Address >= ADDR_FLASH_SECTOR_10))
+  {
+    sector = FLASH_Sector_10;  
+  }
+  else /*if((Address < FLASH_END_ADDR) && (Address >= ADDR_FLASH_SECTOR_11))*/
+  {
+    sector = FLASH_Sector_11;  
+  }
+
+  return sector;
+}
+
+
+uint32_t ReadFirmwareFlag(void) {
+    /* ��ȡ����Ҫ��������д��Ҫ */
+    return *(uint32_t*)(FLAG_ADDRESS-4);
+}
+
+
+void SetFirmwareFlag(uint32_t flag) {
+    uint32_t uwStartSector = 0;
+
+    FLASH_Unlock();
+
+    /* �����û����� (�û�����ָ������û��ʹ�õĿռ䣬�����Զ���)**/
+    /* �������FLASH�ı�־λ */  
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
+                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR);
+
+#if 0
+    /* ��ȡ�̼�������ʼ��ַ�ͽ�����ַ */
+    uwStartSector = GetSector(ADDR_FLASH_SECTOR_12);
+    /* VoltageRange_3 �ԡ���(32λ)���Ĵ�С���в�����������������Ŀռ� */
+    if (FLASH_EraseSector(uwStartSector, VoltageRange_3) != FLASH_COMPLETE)
+    {
+        BOOTLOADER_DEBUG("FLASH_EraseSector err!\n");
+        /*�������������أ�ʵ��Ӧ���пɼ��봦�� */
+        return;
+    }
+#endif
+    if (FLASH_ProgramWord(FLAG_ADDRESS, FW_WRITTEN_FLAG) != FLASH_COMPLETE)
+    {
+        BOOTLOADER_DEBUG("FLASH byte write error at start!\n");
+        return;
+    }
+
+    /* ��FLASH��������ֹ���ݱ��۸�*/
+    FLASH_Lock();
+    return;
+}
+
+
+void CleanFirmwareFlag(uint32_t flag) {
+    uint32_t uwStartSector = 0;
+
+    FLASH_Unlock();
+
+    /* �����û����� (�û�����ָ������û��ʹ�õĿռ䣬�����Զ���)**/
+    /* �������FLASH�ı�־λ */  
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR |
+                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR);
+#if 0
+    /* ��ȡ�̼�������ʼ��ַ�ͽ�����ַ */
+    uwStartSector = GetSector(ADDR_FLASH_SECTOR_11);
+    /* VoltageRange_3 �ԡ���(32λ)���Ĵ�С���в�����������������Ŀռ� */
+    if (FLASH_EraseSector(uwStartSector, VoltageRange_3) != FLASH_COMPLETE)
+    {
+        BOOTLOADER_DEBUG("FLASH_EraseSector err!\n");
+        /*�������������أ�ʵ��Ӧ���пɼ��봦�� */
+        return;
+    }
+#endif
+    if (FLASH_ProgramWord(FLAG_ADDRESS, 0x00000000) != FLASH_COMPLETE)
+    {
+        BOOTLOADER_DEBUG("FLASH byte write error at start!\n");
+        return;
+    }
+
+    /* ��FLASH��������ֹ���ݱ��۸�*/
+    FLASH_Lock();
+    return;
+}
+#endif
+
+// ��ӡ������
+void PrintProgressBar(uint32_t size, uint32_t total_size)
+{
+    int filled_length = 0;
+    char bar[PROGRESS_BAR_LENGTH + 1] = {0};
+    static uint8_t preProgress = 0;
+    uint8_t progress = 0;
+    uint8_t i = 0;
+
+    progress = ((double)size/total_size*100.0 + 0.5);
+
+    //printf("progress %d\n", progress);
+    if(progress < 0 || progress > 100)
+    {
+        return;
+    }
+
+    /* �ظ���ֱ��return */
+    if(preProgress == progress)
+    {
+        return;
+    }
+    preProgress = progress;
+
+    /* progress change: blink blue LED */
+    LED3_TOGGLE;
+
+    /* ÿ����5�����ӡһ�ν��ȱ� */
+    if(0 != (progress%5))
+    {
+        return;
+    }
+
+    filled_length = (progress * PROGRESS_BAR_LENGTH) / 100;
+    memset(bar, ' ', PROGRESS_BAR_LENGTH);
+    bar[PROGRESS_BAR_LENGTH] = '\0'; // ȷ���ַ�����'\0'��β
+    /* ѭ��д�� */
+    for (i = 0; i < filled_length; i++)
+    {
+        bar[i] = '#';
+    }
+
+    // ʹ��\r�ص����ף���ӡ�������Ͱٷֱ�
+    ota_printf( "\r[%s] %d%%", bar, progress);
+    if(100 == progress)
+    {
+        ota_printf("\n\n");
+    }
+    //ota_printf( "[%s] %d%%\n", bar, progress);
+}
+
+
+/**
+ * Read data from flash.
+ * @note This operation's units is word.
+ *
+ * @param addr flash address
+ * @param buf buffer to store read data
+ * @param size read bytes size
+ *
+ * @return result
+ */
+int stm32_flash_read(uint32_t addr, uint8_t *buf, uint32_t size)
+{
+    size_t i;
+
+    if ((addr + size) > STM32_FLASH_END_ADDRESS)
+    {
+        BOOTLOADER_DEBUG("read outrange flash size! addr is (0x%p)", (void*)(addr + size));
+        return -1;
+    }
+
+    for (i = 0; i < size; i++, buf++, addr++)
+    {
+        *buf = *(uint8_t *) addr;
+    }
+
+    return size;
+}
+
+
+/**
+ * Write data to flash.
+ * @note This operation's units is word.
+ * @note This operation must after erase. @see flash_erase.
+ *
+ * @param addr flash address
+ * @param buf the write data buffer
+ * @param size write bytes size
+ *
+ * @return result
+ */
+int stm32_flash_write(uint32_t addr, const uint8_t *buf, uint32_t size)
+{
+    int8_t result = 0;
+    (void)result;
+    uint32_t end_addr = addr + size;
+
+		/* д���ַ�ͳ���У�� */
+    if ((end_addr) > STM32_FLASH_END_ADDRESS)
+    {
+        BOOTLOADER_DEBUG("write outrange flash size! addr is (0x%p)", (void*)(addr + size));
+        return -1;
+    }
+
+    if (size < 1)
+    {
+        return -1;
+    }
+
+    FLASH_Unlock();
+
+    /* �������FLASH�ı�־λ */  
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
+                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
+
+	/* ���ֽ�д�����ݵ��ڲ�flash����ʵ���԰�16λ��32λд�룬���Ǵ���������д����Ҫ����δ�������� */
+    for (size_t i = 0; i < size; i++, addr++, buf++)
+    {
+        /* write data to flash */
+        if (FLASH_COMPLETE == FLASH_ProgramByte(addr, (uint64_t)(*buf)))
+        {
+            if (*(uint8_t *)addr != *buf)
+            {
+                result = -1;
+                (void)result;
+                break;
+            }
+        }
+        else
+        {
+            result = -1;
+            (void)result;
+            break;
+        }
+    }
+
+    FLASH_Lock();
+
+    return result;
+    (void)result;
+}
+
+/**
+ * Erase data on flash.
+ * @note This operation is irreversible.
+ * @note This operation's units is different which on many chips.
+ *
+ * @param addr flash address
+ * @param size erase bytes size
+ *
+ * @return result
+ */
+int stm32_flash_erase(uint32_t addr, uint32_t size)
+{
+    int8_t result = 0;
+    (void)result;
+    uint32_t FirstSector = 0, LastSector = 0, NbOfSectors = 0;
+    (void)NbOfSectors;
+    uint32_t SECTORError = 0;
+    (void)SECTORError;
+
+    if ((addr + size) > STM32_FLASH_END_ADDRESS)
+    {
+        BOOTLOADER_DEBUG("ERROR: erase outrange flash size! addr is (0x%p)\n", (void*)(addr + size));
+        return -1;
+    }
+
+    /* Unlock the Flash to enable the flash control register access */
+    FLASH_Unlock();
+
+    /* �������FLASH�ı�־λ */  
+    FLASH_ClearFlag(FLASH_FLAG_EOP | FLASH_FLAG_OPERR | FLASH_FLAG_WRPERR | 
+                  FLASH_FLAG_PGAERR | FLASH_FLAG_PGPERR|FLASH_FLAG_PGSERR); 
+		
+		/* Get the 1st sector to erase */
+    FirstSector = GetSector(addr);
+    
+    /* Get the number of sector to erase from 1st sector*/
+    LastSector = GetSector(addr + size - 1);
+		
+    while (FirstSector <= LastSector) 
+    {
+        //printf("flash(rom) SectorCounter:%x erased!\n", FirstSector);
+        printf("#");
+        /* VoltageRange_3 �ԡ���(32λ)���Ĵ�С���в�����������������Ŀռ� */ 
+        if (FLASH_EraseSector(FirstSector, VoltageRange_3) != FLASH_COMPLETE)
+        {
+            BOOTLOADER_DEBUG("FLASH_EraseSector err!\n");
+            /*�������������أ�ʵ��Ӧ���пɼ��봦�� */
+            return -1;
+        }
+
+        /* ������ָ����һ������ */
+        if (FirstSector == FLASH_Sector_11)
+        {
+            /* sector11-sector12֮��ļ����40 */
+            FirstSector += 40;
+        } 
+        else
+        {
+            /* ��������֮��ļ����8 */
+            FirstSector += 8;
+        }
+    }
+    FLASH_Lock();
+    printf("\n");
+    BOOTLOADER_DEBUG("flash(rom) erase success!\n");
+    return 0;
+}		
+		

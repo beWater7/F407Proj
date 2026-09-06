@@ -12,6 +12,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include "devConfig.h"
+#include "os_log.h"
 #include "safe_utils.h"
 #include "upgrade.h"
 #include "os_task.h"
@@ -70,7 +71,7 @@ void waitModuleInit()
 
     FOREVER
     {
-        os_debug("wait Module init\n");
+        LOGI(LOG_MOD_DEVCFG, "wait Module init\n");
         if(waitDevCfgModuleInit)
         {
             break;
@@ -99,12 +100,12 @@ int rebuildCfg(uint32_t dwCrcChkSum)
     stCfgMng.dwCrc32 = dwCrcChkSum;
 
     if (SPI_FLASH_WRITE(PART_CONFIG, 0, (uint8 *)&stCfgMng, sizeof(CFG_MNG_T)) < 0) {
-        DEVCFG_DEBUG(DEVCFG_ERROR"rebuildCfg: write CFG_MNG failed\n");
+        LOGE(LOG_MOD_DEVCFG, "rebuildCfg: write CFG_MNG failed\n");
         return RET_ERR;
     }
 
     if (writeDevParam() < 0) {
-        DEVCFG_DEBUG(DEVCFG_ERROR"rebuildCfg: writeDevParam failed\n");
+        LOGE(LOG_MOD_DEVCFG, "rebuildCfg: writeDevParam failed\n");
         return RET_ERR;
     }
 
@@ -216,7 +217,7 @@ int get_Param(uint32_t dwMagic, uint8_t *param)
 
     if(get_fate(dwMagic, &stFate))
     {
-        DEVCFG_DEBUG("get fate err!\n");
+        LOGW(LOG_MOD_DEVCFG, "get fate err!\n");
         return RET_ERR;
     }
 
@@ -244,15 +245,15 @@ int readDevCfg(DEV_PARAM_PTR pstDevParam)
     SPI_FLASH_READ(PART_CONFIG, dwOffset, (uint8_t *)&stCfgMng, sizeof(CFG_MNG_T));
     /* 首次上电/损坏时 magic 非法是预期路径，走 restore，不要当致命 ASSERT 刷屏 */
     if (DEV_MNG_MAGIC != stCfgMng.dwMagic) {
-        DEVCFG_DEBUG(DEVCFG_WARN"cfg magic invalid: 0x%08x (expect 0x%08x)\n",
-                     stCfgMng.dwMagic, DEV_MNG_MAGIC);
+        LOGW(LOG_MOD_DEVCFG, "cfg magic invalid: 0x%08x (expect 0x%08x)\n",
+             stCfgMng.dwMagic, DEV_MNG_MAGIC);
         return RET_ERR;
     }
     
     dwOffset = sizeof(CFG_MNG_T) + FATE_ID_MAX*sizeof(FATE_NODE_T);
     if(SPI_FLASH_READ(PART_CONFIG, dwOffset, (uint8_t*)pstDevParam, sizeof(DEV_PARAM_T)) < 0)
     {
-        DEVCFG_DEBUG(DEVCFG_ERROR"[%s:%d]SPI_FLASH_READ err!\n",__FUNCTION__,__LINE__);
+        LOGE(LOG_MOD_DEVCFG, "[%s:%d]SPI_FLASH_READ err!\n",__FUNCTION__,__LINE__);
         return RET_ERR;
     }
     return RET_OK;
@@ -333,7 +334,7 @@ static void devParam_Mng_task(void *arg)
         {
             /* 写入新的配置 */
             rebuildCfg(0);
-            DEVCFG_DEBUG(DEVCFG_WARN"dev param update to flash!\n");
+            LOGW(LOG_MOD_DEVCFG, "dev param update to flash!\n");
 #if DEVPARAM_CRC_ENABLE
             /* 读取新的配置以生成crc */
             readDevCfg(&stDevParam);
@@ -402,29 +403,28 @@ int devPara_init()
      */
     if(readDevCfg(g_pstDevParam) < 0)
     {
-        DEVCFG_DEBUG(DEVCFG_WARN"readDevCfg fail, restore defaults...\n");
+        LOGW(LOG_MOD_DEVCFG, "readDevCfg fail, restore defaults...\n");
         if (devCfgRestore() < 0) {
-            DEVCFG_DEBUG(DEVCFG_ERROR"devCfgRestore failed\n");
+            LOGE(LOG_MOD_DEVCFG, "devCfgRestore failed\n");
             return RET_ERR;
         }
         if (readDevCfg(g_pstDevParam) < 0) {
-            DEVCFG_DEBUG(DEVCFG_ERROR"readDevCfg still fail after restore\n");
+            LOGE(LOG_MOD_DEVCFG, "readDevCfg still fail after restore\n");
             return RET_ERR;
         }
-        DEVCFG_DEBUG(DEVCFG_REPORT"dev cfg restored OK\n");
+        LOGI(LOG_MOD_DEVCFG, "dev cfg restored OK\n");
     }
 
     waitDevCfgModuleInit = TRUE;
 
     /* 恢复的 byDebugLevel 必须合法，否则 log_level_str[level] 越界读代码区乱码 */
     if (g_pstDevParam->stDevParam.byDebugLevel > DLEVEL_TRACE) {
-        DEVCFG_DEBUG(DEVCFG_WARN"byDebugLevel=%u invalid, fallback to DLEVEL_REPORT\n",
-                     g_pstDevParam->stDevParam.byDebugLevel);
+        LOGW(LOG_MOD_DEVCFG, "byDebugLevel=%u invalid, fallback to DLEVEL_REPORT\n",
+             g_pstDevParam->stDevParam.byDebugLevel);
         g_pstDevParam->stDevParam.byDebugLevel = DLEVEL_REPORT;
         g_stDevParamMng.bySave = 1;   /* 回写修正 */
     }
-    /* DEBUG: 临时插桩，记录开机恢复的 byDebugLevel（验证后移除） */
-    os_printf("\r\n[DBG] boot byDebugLevel=%u\r\n", (unsigned)g_pstDevParam->stDevParam.byDebugLevel);
+
     setDebugLevel(g_pstDevParam->stDevParam.byDebugLevel);
 
     /* 堆重叠时 JSON 会被写进 wifi 字段并落盘；开机丢掉脏数据并回写 */
@@ -437,7 +437,7 @@ int devPara_init()
         memset(g_pstDevParam->stDevParam.wifiPsk, 0,
                sizeof(g_pstDevParam->stDevParam.wifiPsk));
         g_stDevParamMng.bySave = 1;
-        DEVCFG_DEBUG(DEVCFG_WARN"wifi nv garbage, cleared\n");
+        LOGW(LOG_MOD_DEVCFG, "wifi nv garbage, cleared\n");
     }
 
     return RET_OK;
@@ -467,8 +467,8 @@ int readDevParam(DEV_PARAM_PTR pStDevParam)
     dwOffset = sizeof(CFG_MNG_T) + DEV_FATE_ID*sizeof(FATE_NODE_T);
     SPI_FLASH_READ(PART_CONFIG, dwOffset, (uint8_t*)&stFate, sizeof(FATE_NODE_T));
 
-    DEVCFG_DEBUG(
-        DEVCFG_PREFIX "stFate.type:%d, dwMagic:0x%x, fateOffset:0x%x, entryOffset:0x%x, entryLen:%d, entryNum:%d\n",
+    LOGI(LOG_MOD_DEVCFG,
+         "stFate.type:%d, dwMagic:0x%x, fateOffset:0x%x, entryOffset:0x%x, entryLen:%d, entryNum:%d\n",
         stFate.type,
         stFate.dwMagic,
         stFate.fateOffset,
@@ -537,7 +537,7 @@ int writeDevParam(DEV_PARAM_PTR pStDevParam)
     SPI_FLASH_WRITE(PART_CONFIG, dwOffset, (uint8_t*)pStDevParam, sizeof(DEVINFO_PARAM_T));
 #if 0
     SPI_FLASH_READ(PART_CONFIG, dwOffset, (uint8_t*)&stFate, sizeof(FATE_NODE_T));
-    DEVCFG_DEBUG(DEVCFG_PREFIX"stFate.type:%d, dwMagic:0x%x, offset:0x%x, len:%d, crc32:%d\n", \
+    LOGD(LOG_MOD_DEVCFG, "stFate.type:%d, dwMagic:0x%x, offset:0x%x, len:%d, crc32:%d\n", \
                                     stFate.type,                                                 \
                                     stFate.dwMagic,                                              \
                                     stFate.offset,                                               \

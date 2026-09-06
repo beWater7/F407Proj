@@ -3,7 +3,7 @@
 
 
 
-#include "stm32f4xx.h"
+#include <stdint.h>
 
  
  
@@ -11,51 +11,51 @@
 #define NULL 0
 #endif
 
-//¶¨ÒåÁ½¸öÄÚ´æ³Ø
-#define SRAMIN	 0		//ÄÚ²¿ÄÚ´æ³Ø
-#define SRAMEX   1		//Íâ²¿ÄÚ´æ³Ø 
+//ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ï¿½
+#define SRAMIN	 0		//ï¿½Ú²ï¿½ï¿½Ú´ï¿½ï¿½
+#define SRAMEX   1		//ï¿½â²¿ï¿½Ú´ï¿½ï¿½ 
 
-#define SRAMBANK 	2	  //¶¨ÒåÖ§³ÖµÄSRAM¿éÊý.	
-
-
-//mem1ÄÚ´æ²ÎÊýÉè¶¨.mem1ÍêÈ«´¦ÓÚÄÚ²¿SRAMÀïÃæ.
-#define MEM1_BLOCK_SIZE			32  	  						              //ÄÚ´æ¿é´óÐ¡Îª32×Ö½Ú
-#define MEM1_MAX_SIZE			  40*1024  						              //×î´ó¹ÜÀíÄÚ´æ 40K
-#define MEM1_ALLOC_TABLE_SIZE	MEM1_MAX_SIZE/MEM1_BLOCK_SIZE 	//ÄÚ´æ±í´óÐ¡
+#define SRAMBANK 	2	  //ï¿½ï¿½ï¿½ï¿½Ö§ï¿½Öµï¿½SRAMï¿½ï¿½ï¿½ï¿½.	
 
 
-//mem2ÄÚ´æ²ÎÊýÉè¶¨.mem2µÄÄÚ´æ³Ø´¦ÓÚÍâ²¿SRAMÀïÃæ
-#define MEM2_BLOCK_SIZE			32  	  						              //ÄÚ´æ¿é´óÐ¡Îª32×Ö½Ú
-#define MEM2_GLOBAL_SIZE    240 *1024                         //Ô¤Áô240K¸øÈ«¾Ö±äÁ¿Ê¹ÓÃ
-#define MEM2_MAX_SIZE			  960 *1024 - 240 *1024			        //×î´ó¹ÜÀíÄÚ´æ960K-240K = 720K
-#define MEM2_ALLOC_TABLE_SIZE	MEM2_MAX_SIZE/MEM2_BLOCK_SIZE 	//ÄÚ´æ±í´óÐ¡ 
+//mem1ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½è¶¨.mem1ï¿½ï¿½È«ï¿½ï¿½ï¿½ï¿½ï¿½Ú²ï¿½SRAMï¿½ï¿½ï¿½ï¿½.
+#define MEM1_BLOCK_SIZE			32  	  						              //ï¿½Ú´ï¿½ï¿½ï¿½Ð¡Îª32ï¿½Ö½ï¿½
+#define MEM1_MAX_SIZE			  40*1024  						              //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½ 40K
+#define MEM1_ALLOC_TABLE_SIZE	MEM1_MAX_SIZE/MEM1_BLOCK_SIZE 	//ï¿½Ú´ï¿½ï¿½ï¿½ï¿½Ð¡
+
+
+//mem2ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½è¶¨.mem2ï¿½ï¿½ï¿½Ú´ï¿½Ø´ï¿½ï¿½ï¿½ï¿½â²¿SRAMï¿½ï¿½ï¿½ï¿½
+#define MEM2_BLOCK_SIZE			32  	  						              //ï¿½Ú´ï¿½ï¿½ï¿½Ð¡Îª32ï¿½Ö½ï¿½
+#define MEM2_GLOBAL_SIZE    240 *1024                         //Ô¤ï¿½ï¿½240Kï¿½ï¿½È«ï¿½Ö±ï¿½ï¿½ï¿½Ê¹ï¿½ï¿½
+#define MEM2_MAX_SIZE			  960 *1024 - 240 *1024			        //ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½960K-240K = 720K
+#define MEM2_ALLOC_TABLE_SIZE	MEM2_MAX_SIZE/MEM2_BLOCK_SIZE 	//ï¿½Ú´ï¿½ï¿½ï¿½ï¿½Ð¡ 
 		 
 #define __EXRAM __attribute__((section("EXRAM")))
  
-//ÄÚ´æ¹ÜÀí¿ØÖÆÆ÷
+//ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½
 struct _m_mallco_dev
 {
-	void    ( * init ) ( uint8_t );				 //³õÊ¼»¯
-	uint8_t ( * perused ) ( uint8_t );		 //ÄÚ´æÊ¹ÓÃÂÊ
-	uint8_t  * membase [ SRAMBANK ];		   //ÄÚ´æ³Ø ¹ÜÀíSRAMBANK¸öÇøÓòµÄÄÚ´æ
-	uint16_t * memmap [ SRAMBANK ]; 		   //ÄÚ´æ¹ÜÀí×´Ì¬±í
-	uint8_t    memrdy [ SRAMBANK ]; 			 //ÄÚ´æ¹ÜÀíÊÇ·ñ¾ÍÐ÷
+	void    ( * init ) ( uint8_t );				 //ï¿½ï¿½Ê¼ï¿½ï¿½
+	uint8_t ( * perused ) ( uint8_t );		 //ï¿½Ú´ï¿½Ê¹ï¿½ï¿½ï¿½ï¿½
+	uint8_t  * membase [ SRAMBANK ];		   //ï¿½Ú´ï¿½ï¿½ ï¿½ï¿½ï¿½ï¿½SRAMBANKï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½
+	uint16_t * memmap [ SRAMBANK ]; 		   //ï¿½Ú´ï¿½ï¿½ï¿½ï¿½×´Ì¬ï¿½ï¿½
+	uint8_t    memrdy [ SRAMBANK ]; 			 //ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½Ç·ï¿½ï¿½ï¿½ï¿½
 };
-extern struct _m_mallco_dev mallco_dev;	 //ÔÚmallco.cÀïÃæ¶¨Òå
+extern struct _m_mallco_dev mallco_dev;	 //ï¿½ï¿½mallco.cï¿½ï¿½ï¿½æ¶¨ï¿½ï¿½
 
 
-void mymemset(void *s,uint8_t c,uint32_t count);	    //ÉèÖÃÄÚ´æ
-void mymemcpy(void *des,void *src,uint32_t n);        //¸´ÖÆÄÚ´æ     
-void my_mem_init(uint8_t memx);				                //ÄÚ´æ¹ÜÀí³õÊ¼»¯º¯Êý(Íâ/ÄÚ²¿µ÷ÓÃ)
-uint32_t my_mem_malloc(uint8_t memx,uint32_t size);	  //ÄÚ´æ·ÖÅä(ÄÚ²¿µ÷ÓÃ)
-uint8_t my_mem_free(uint8_t memx,uint32_t offset);		//ÄÚ´æÊÍ·Å(ÄÚ²¿µ÷ÓÃ)
-uint8_t my_mem_perused(uint8_t memx);				          //»ñµÃÄÚ´æÊ¹ÓÃÂÊ(Íâ/ÄÚ²¿µ÷ÓÃ) 
+void mymemset(void *s,uint8_t c,uint32_t count);	    //ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½
+void mymemcpy(void *des,void *src,uint32_t n);        //ï¿½ï¿½ï¿½ï¿½ï¿½Ú´ï¿½     
+void my_mem_init(uint8_t memx);				                //ï¿½Ú´ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½Ê¼ï¿½ï¿½ï¿½ï¿½ï¿½ï¿½(ï¿½ï¿½/ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½)
+uint32_t my_mem_malloc(uint8_t memx,uint32_t size);	  //ï¿½Ú´ï¿½ï¿½ï¿½ï¿½(ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½)
+uint8_t my_mem_free(uint8_t memx,uint32_t offset);		//ï¿½Ú´ï¿½ï¿½Í·ï¿½(ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½)
+uint8_t my_mem_perused(uint8_t memx);				          //ï¿½ï¿½ï¿½ï¿½Ú´ï¿½Ê¹ï¿½ï¿½ï¿½ï¿½(ï¿½ï¿½/ï¿½Ú²ï¿½ï¿½ï¿½ï¿½ï¿½) 
 
 
-//ÓÃ»§µ÷ÓÃº¯Êý
-void myfree(uint8_t memx,void *ptr);  			           //ÄÚ´æÊÍ·Å(Íâ²¿µ÷ÓÃ)
-void *mymalloc(uint8_t memx,uint32_t size);			       //ÄÚ´æ·ÖÅä(Íâ²¿µ÷ÓÃ)
-void *myrealloc(uint8_t memx,void *ptr,uint32_t size); //ÖØÐÂ·ÖÅäÄÚ´æ(Íâ²¿µ÷ÓÃ)
+//ï¿½Ã»ï¿½ï¿½ï¿½ï¿½Ãºï¿½ï¿½ï¿½
+void myfree(uint8_t memx,void *ptr);  			           //ï¿½Ú´ï¿½ï¿½Í·ï¿½(ï¿½â²¿ï¿½ï¿½ï¿½ï¿½)
+void *mymalloc(uint8_t memx,uint32_t size);			       //ï¿½Ú´ï¿½ï¿½ï¿½ï¿½(ï¿½â²¿ï¿½ï¿½ï¿½ï¿½)
+void *myrealloc(uint8_t memx,void *ptr,uint32_t size); //ï¿½ï¿½ï¿½Â·ï¿½ï¿½ï¿½ï¿½Ú´ï¿½(ï¿½â²¿ï¿½ï¿½ï¿½ï¿½)
 
 /* Added by liudayi */
 void *os_exsram_malloc(uint32_t size);

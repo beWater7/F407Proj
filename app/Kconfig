@@ -64,4 +64,13 @@ config APP_FATFS
 	  Compile FatFs. Web/OTA use SPI flash partitions directly;
 	  enable only if you need filesystem APIs.
 
+config APP_USB_HOST
+	bool "USB Host (OTG_FS + MSC, mount U-disk as FatFs)"
+	default n
+	select APP_FATFS
+	help
+	  STM32 USB OTG FS in host mode with the STM32 USB Host
+	  Library (MSC class). Exposes the attached U-disk as a
+	  FatFs volume "2:" and auto-mounts it on enumeration.
+
 endmenu

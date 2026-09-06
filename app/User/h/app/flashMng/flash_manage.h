@@ -31,6 +31,8 @@ typedef struct storageCtrl STORAGE_CTRL_T, *STORAGE_CTRL_PTR;
 
 /* SPI分区 */
 typedef enum {
+    PART_LOADER,    /* loader 主区（0x000000，64K） */
+    PART_LOADER_BK, /* 闲置备份分区（0x010000，64K；布局保留，boot 不再读） */
     PART_APP1,    
     PART_APP2,      
     PART_OTA,      
@@ -143,6 +145,9 @@ void hex_dump(uint8_t part, uint32_t offset, uint32_t len, uint8_t dev_id);
 
 /* === 实例化函数 === */
 void FlashPartition_Init(STORAGE_CTRL_PTR self, STORAGE_PART_INFO_PTR pStPartInfo, uint8_t byPartNum, STORAGE_HW_OPS_PTR pPartHwOps);
+
+/* 用设备树(dts)分区表覆盖 spi_flash_table 的 addr/size/flags, 返回应用到的分区数 */
+int dts_apply_partitions(void);
 
 /* 自定义区 */
 #define SPI_FLASH_WRITE_VERIFY(part, offset, buf, size) \

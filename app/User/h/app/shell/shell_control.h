@@ -26,13 +26,14 @@
 ************************************************/
 void shell_conteol_register(void);
 void shell_control_explain(unsigned int* ID);
-void aaa(void);
 
 
 /************************************************
 	?????????
 ************************************************/
+#ifndef SHELL_PROMPT
 #define SHELL_PROMPT "\r\nSTM32F407 >"
+#endif
 
 #endif
 

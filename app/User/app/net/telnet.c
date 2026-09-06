@@ -10,7 +10,6 @@
  * @copyright Copyright (c) [2025] [LDY/STM32F407]
  ***************************************************************/
 
-#include "stm32f4xx.h"
 #include <stdio.h>
 #include <stdint.h>
 #include <string.h>

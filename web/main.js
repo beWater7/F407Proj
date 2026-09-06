@@ -107,9 +107,30 @@
 	}
 
 	// 定时更新
-	setInterval(updateSystem, 5000);
+    setInterval(updateSystem, 5000);
 	updateSystem();
 
+    // 升级状态:当前运行槽 / 目标槽(裁包与后续差分升级的依据)
+    function updateOtaStatus() {
+      fetch('/protocol/system/ota')
+        .then(r => r.json())
+        .then(d => {
+          const el = document.getElementById('otaStatusHint');
+          if (!el) return;
+          if (!d || !d.data) { el.textContent = '升级状态读取失败'; return; }
+          const dt = d.data;
+          const ver = (dt.staging_len && dt.staging_len > 0)
+            ? dt.staging_len + 'B crc=' + (dt.staging_crc32 >>> 0).toString(16)
+            : '未检测到';
+          el.textContent = '当前运行 APP' + dt.active_app + '，升级将写入 APP' +
+            dt.target_slot + '（回滚槽） ｜ 上次升级 ' + ver;
+        })
+        .catch(() => {
+          const el = document.getElementById('otaStatusHint');
+          if (el) el.textContent = '升级状态读取失败';
+        });
+    }
+    updateOtaStatus();
 
     // 文件上传 / 设备升级：带进度条的 POST
     function fmtBytes(n) {

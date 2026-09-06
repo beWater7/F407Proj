@@ -108,24 +108,6 @@ uint8_t getDhcpEnabled(void);
 #define DEVPARAM_CRC_ENABLE  0
 
 
-#define DEVCFG_PREFIX  "[DEVCFG] "
-#define DEVCFG_ALERT   KERN_ALERT DEVCFG_PREFIX
-#define DEVCFG_ERROR   KERN_ERROR DEVCFG_PREFIX
-#define DEVCFG_WARN    KERN_WARN DEVCFG_PREFIX
-#define DEVCFG_REPORT  KERN_REPORT DEVCFG_PREFIX
-#define DEVCFG_INFO    KERN_INFO DEVCFG_PREFIX
-#define DEVCFG_TRACE   KERN_TRACE DEVCFG_PREFIX
-
-
-#define DEVCFG_DEBUG_ENABLE  1
-
-
-#if DEVCFG_DEBUG_ENABLE
-#define DEVCFG_DEBUG(format, ...) os_printf_api(format, ##__VA_ARGS__)
-#else
-#define DEVCFG_DEBUG(format, ...)
-#endif
-
 int devCfg_init();
 int devPara_init();
 int devCfgRestore();

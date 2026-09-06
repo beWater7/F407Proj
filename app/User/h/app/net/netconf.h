@@ -35,20 +35,20 @@
 #endif
 
 /* Includes ------------------------------------------------------------------*/
-#include "stm32f4xx.h"
+#include <stdint.h>
 	 
 /* Exported types ------------------------------------------------------------*/
-/* DHCP状态 */
+/* DHCP?? */
 #define DHCP_START                 1
 #define DHCP_WAIT_ADDRESS          2
 #define DHCP_ADDRESS_ASSIGNED      3
 #define DHCP_TIMEOUT               4
 #define DHCP_LINK_DOWN             5
 
-//1-默认开启 0-关闭 DHCP, 关闭DHCP就算是定义为0也不行吗，必须要注释整个define
+//1-?????? 0-??? DHCP, ???DHCP??????????0??????????????????define
 #define USE_DHCP       /* enable DHCP, if disabled static address is used */
 
-/* 调试信息输出 */  
+/* ?????????? */  
 #define SERIAL_DEBUG 
 /* user define IP */
 #define DEST_IP_ADDR0               192
@@ -65,25 +65,25 @@
 #define MAC_ADDR4                     0x07
 #define MAC_ADDR5                     0x07
 
-/* static IP址 */
+/* static IP? */
 #define IP_ADDR0                    192
 #define IP_ADDR1                    168
 #define IP_ADDR2                    137
 #define IP_ADDR3                    122
 
-/* 子网掩码 */
+/* ???????? */
 #define NETMASK_ADDR0               255
 #define NETMASK_ADDR1               255
 #define NETMASK_ADDR2               255
 #define NETMASK_ADDR3                 0
 
-/* 网关 */
+/* ???? */
 #define GW_ADDR0                    192
 #define GW_ADDR1                    168
 #define GW_ADDR2                    137
 #define GW_ADDR3                      1
 
-/* 检测PHY链路状态的实际间隔(单位：ms) */
+/* ???PHY??锟斤拷?????????(??锟斤拷??ms) */
 #ifndef LINK_TIMER_INTERVAL
 #define LINK_TIMER_INTERVAL        1000
 #endif
@@ -92,7 +92,7 @@
 #define RMII_MODE  
 //#define MII_MODE
 
-/* 在MII模式时，使能MCO引脚输出25MHz脉冲 */
+/* ??MII????????MCO???????25MHz???? */
 #ifdef 	MII_MODE
  #define PHY_CLOCK_MCO
 #endif
@@ -102,7 +102,7 @@
 /* Exported functions ------------------------------------------------------- */
 void LwIP_Init(void);
 void LwIP_Pkt_Handle(void);
-void LwIP_Periodic_Handle(__IO uint32_t localtime);
+void LwIP_Periodic_Handle(volatile uint32_t localtime);
 
 void lwip_netif_init(void);
 
