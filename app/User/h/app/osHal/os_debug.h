@@ -74,8 +74,16 @@ extern uint8 __print_buf_len__;
 extern const char *__color_output__[];
 
 /* 把 __print_buf__[0..__print_buf_len__) 输出到 telnet hook + UART。
- * os_printf_api 与 os_log() 共用，保证单条日志完整写出不拆行 */
+ * os_printf_api 与 os_log() 共用，保证单条日志完整写出不拆行。
+ * 出口处会释放 os_print_buf_begin() 取得的打印锁 */
 void os_print_buf_flush(void);
+
+/* 打印串行化：__print_buf__ 是全局共享缓冲，任何要渲染到它的函数
+ * 都必须先 begin() 再 flush()(flush 内部 release)，
+ * 否则多任务/中断并发会撕裂缓冲，串口出现字符级交错的乱码。
+ * begin() 返回 0 表示本轮放弃打印(锁被中断占着等)，调用方直接 return。 */
+int  os_print_buf_begin(void);
+void os_print_buf_release(void);
 
 void print_redirect(__print_callback__ func, void* argc);
 void os_printf_api( const char *format, ...);

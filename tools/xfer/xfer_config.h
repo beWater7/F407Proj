@@ -56,4 +56,21 @@
 #define XFER_DEFAULT_RETRIES 3
 #endif
 
+/* ============ 串口占用抢占 ============ */
+/* 端口被占用时, 最多列出/尝试抢占多少个进程(+1 之外的只提示不处理) */
+#ifndef XFER_PREEMPT_MAX_HOLDERS
+#define XFER_PREEMPT_MAX_HOLDERS 16
+#endif
+
+/* 发 SIGTERM 后等待端口释放的时长(ms)。占用方(如 serialTerm)响应信号 +
+ * 关闭串口需要时间, 给足余量; 超时仍未释放则升级 SIGKILL。 */
+#ifndef XFER_PREEMPT_TERM_WAIT_MS
+#define XFER_PREEMPT_TERM_WAIT_MS 1500
+#endif
+
+/* 发 SIGKILL 后等待端口释放的时长(ms)。SIGKILL 无法被忽略, 通常远快于上值。 */
+#ifndef XFER_PREEMPT_KILL_WAIT_MS
+#define XFER_PREEMPT_KILL_WAIT_MS 1000
+#endif
+
 #endif /* XFER_CONFIG_H */

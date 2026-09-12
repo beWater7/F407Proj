@@ -589,12 +589,38 @@ void hard_fault_handler_c(uint32_t *stack)
  * @note     已迁移至 hal_board_f4.c（hal_board_init 内统一初始化）
  *****************************************************/
 
+/* ==================== reset reason ==================== */
+/* boot/loader already read+cleared RCC_CSR, so this normally prints "none":
+ * it proves no reset happened between loader handing over and app start.
+ * FLASH_OPTCR bit0 = IWDG mode: 1 = software (armed by hal_board_init below),
+ * 0 = hardware (armed at power-on and cannot be disabled, so a hung loader or
+ * a boot stage without a watchdog feeder also gets reset). */
+static void app_report_reset_reason(void)
+{
+    uint32_t csr = RCC->CSR;
+    uint32_t iwdg_sw = FLASH->OPTCR & 0x1u;
+
+    LOGR(LOG_MOD_SYS, "RST:%s%s%s%s%s%s%s%s | IWDG=%s\r\n",
+         (csr & RCC_CSR_LPWRRSTF) ? " LPWR" : "",
+         (csr & RCC_CSR_WWDGRSTF) ? " WWDG" : "",
+         (csr & RCC_CSR_WDGRSTF)  ? " IWDG" : "",
+         (csr & RCC_CSR_SFTRSTF)  ? " SW"   : "",
+         (csr & RCC_CSR_PORRSTF)  ? " POR"  : "",
+         (csr & RCC_CSR_PADRSTF)  ? " NRST" : "",
+         (csr & RCC_CSR_BORRSTF)  ? " BOR"  : "",
+         ((csr & 0xFE000000u) == 0u) ? " none" : "",
+         iwdg_sw ? "SW" : "HW");
+
+    RCC->CSR |= RCC_CSR_RMVF;   /* clear so the next reset is unambiguous */
+}
+
 void board_init(void)
 {
     /* 串口/LED/按键/时基/RTC/PSRAM/SPI Flash/看门狗 等硬件初始化 */
     hal_board_init();
 
     LOGR(LOG_MOD_SYS, "board bsp init success %s\r\n", __DATE__);
+    app_report_reset_reason();
 
     return;
 }
@@ -1030,7 +1056,6 @@ static int app_main(void)
 
 #if defined(CONFIG_APP_ESP8266)
 	ESP8266_Init();
-
     os_task_spawn("esp8266_recv", esp8266_recv_task, NULL, 1024, TASK_PRIORITY_NORMAL);
 #endif
 

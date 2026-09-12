@@ -19,6 +19,16 @@
 #define BEEP_OFF
 #endif
 
+/* ESP8266 AT 原始应答透显开关。
+ * 打开后,ESP8266 每帧原始回包(Recv N bytes / SEND OK / +IPD... / CLOSED /
+ * WIFI CONNECTED ...)会逐字节转发到调试串口,仅用于抓 AT 时序。
+ *   0 = 编译期彻底移除(默认),不做任何输出;
+ *   1 = 保留代码,并由运行时 shell `dbg esp8266 0|1` 控制。
+ * 也可在编译命令行覆盖:-DESP8266_AT_TRACE_EN=1 */
+#ifndef ESP8266_AT_TRACE_EN
+#define ESP8266_AT_TRACE_EN  0
+#endif
+
 #define ESP_JSON_LEN  1024
 // 定义一个类型，代表接收函数指针和相关参数的回调类型
 typedef bool (*FuncPtr)(void);  // 返回bool类型，表示是否成功的函数指针类型
@@ -864,7 +874,6 @@ static bool __ESP8266_Disable_MultipleId(void)
 {
     return ESP8266_Enable_MultipleId(DISABLE);
 }
-
 void ESP8266_StaTcpClient_Unvarnish_ConfigTest(void)
 {
     uint8 byRet = 0;
@@ -978,12 +987,17 @@ void ESP8266_CheckRecvDataTest(void)
   if(strEsp8266_Fram_Record.InfBit.FramFinishFlag)
   {
     uint16_t rxlen = strEsp8266_Fram_Record.InfBit.FramLength;
-    for(i = 0;i < rxlen; i++)
-    {
-       /* esp8266 data send to usart1 */
-       USART_SendData( DEBUG_USART ,strEsp8266_Fram_Record .Data_RX_BUF[i]);    //ת����ESP8266
-       while(USART_GetFlagStatus(DEBUG_USART,USART_FLAG_TC)==RESET){}
+#if ESP8266_AT_TRACE_EN
+    /* AT 原样回包透显:默认编译期关闭(见文件头 ESP8266_AT_TRACE_EN) */
+    if (g_log_mods[LOG_MOD_ESP8266].enabled) {
+        for (i = 0; i < rxlen; i++) {
+            USART_SendData(DEBUG_USART, strEsp8266_Fram_Record.Data_RX_BUF[i]);
+            while (USART_GetFlagStatus(DEBUG_USART, USART_FLAG_TC) == RESET) {}
+        }
+        USART_SendData(DEBUG_USART, '\n');
+        while (USART_GetFlagStatus(DEBUG_USART, USART_FLAG_TC) == RESET) {}
     }
+#endif
     if (rxlen >= RX_BUF_MAX_LEN) {
         rxlen = RX_BUF_MAX_LEN - 1U;
     }

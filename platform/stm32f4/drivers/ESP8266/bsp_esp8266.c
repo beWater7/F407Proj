@@ -988,7 +988,7 @@ bool ESP8266_SendString ( FunctionalState enumEnUnvarnishTx, char * pStr, u32 ul
 
 		bRet = ESP8266_Cmd ( pStr, "SEND OK", 0, 500 );
   }
-	
+
 	return bRet;
 
 }

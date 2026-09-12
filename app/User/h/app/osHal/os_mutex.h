@@ -51,6 +51,24 @@ typedef os_mutex_t os_mutex;
 }while (0)
 
 #define os_mutex_destroy(x)            vSemaphoreDelete((x))
+
+/* ==================== 上下文 / 临界区 抽象 ====================
+ * 上层(os_debug 等通用模块)一律走这里的 os_* 名字，不直接调 FreeRTOS raw 接口，
+ * 换 RTOS 时只改本文件，不动业务代码。 */
+
+/* 当前是否处于中断上下文(ISR)。
+ * 用途：中断里不能阻塞等锁，也不能建锁(建锁要走堆分配) */
+#define os_in_isr()                     (xPortIsInsideInterrupt() != pdFALSE)
+
+/* 非阻塞取锁：拿不到立刻返回，供"可放弃"的场合使用。
+ * 注意：FreeRTOS 不允许在 ISR 中对互斥量 take/give，
+ *       调用方必须先判 os_in_isr()，只在任务上下文使用本宏 */
+#define os_mutex_trylock(p)             (xSemaphoreTake((p), 0) == pdTRUE)
+
+/* 临界区：短小、不可阻塞的代码段 */
+#define os_critical_enter()             taskENTER_CRITICAL()
+#define os_critical_exit()              taskEXIT_CRITICAL()
+
 #define os_task_create(pxTaskCode, pcName, uxStackDepth, pvParameters, uxPriority, pxCreatedTask)   \
                         xTaskCreate(pxTaskCode,      \
                             pcName,                  \
@@ -108,6 +126,12 @@ typedef rt_sem_t os_sem_t;
 #define os_sem_give_from_isr(x)         rt_sem_release((x))   /* RT-Thread支持中断释放 */
 #define os_sem_delete(x)                rt_sem_delete((x))
 
+/* 上下文 / 临界区 抽象（RT-Thread 实现） */
+#define os_in_isr()                     (rt_interrupt_get_nest() > 0)
+#define os_mutex_trylock(p)             (rt_sem_take((p), 0) == RT_EOK)
+#define os_critical_enter()             rt_enter_critical()
+#define os_critical_exit()              rt_exit_critical()
+
 #elif defined(USE_BAREMETAL)
 typedef struct {
     volatile int count;
@@ -119,6 +143,12 @@ typedef struct {
 #define os_sem_give_from_isr(x)         os_sem_give(x)
 #define os_sem_delete(x)                do { (x).count = 0; } while(0)
 
+/* 上下文 / 临界区 抽象（裸机：无 RTOS，恒不在中断上下文，无锁） */
+#define os_in_isr()                     (0)
+#define os_mutex_trylock(p)             (1)
+#define os_critical_enter()             do {} while(0)
+#define os_critical_exit()              do {} while(0)
+
 /* 其他系统 */
 
 #else
@@ -127,6 +157,12 @@ typedef void *os_mutex_t;
 #define os_mutex_lock(p) ((void)0)
 #define os_mutex_unlock(p) ((void)0)
 #define os_mutex_destroy(p) ((void)0)
+
+/* 上下文 / 临界区 抽象（未适配的 RTOS：退化为单上下文无锁） */
+#define os_in_isr()                     (0)
+#define os_mutex_trylock(p)             (1)
+#define os_critical_enter()             do {} while(0)
+#define os_critical_exit()              do {} while(0)
 #endif
 
 

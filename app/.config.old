@@ -1,9 +1,28 @@
-# APP optional features — default: all cut (n)
-# Restore with: ./scripts/menuconfig.sh
-# CONFIG_APP_ESP8266 is not set
+#
+# Automatically generated file; DO NOT EDIT.
+# F407Proj Application Configuration
+#
+
+#
+# Optional peripherals
+#
+CONFIG_APP_ESP8266=y
 # CONFIG_APP_DHT11 is not set
 # CONFIG_APP_MULTIBUTTON is not set
 # CONFIG_APP_CAN is not set
+
+#
+# Optional networking apps
+#
 # CONFIG_APP_TELNET is not set
 # CONFIG_APP_SNTP is not set
+
+#
+# Optional storage
+#
 # CONFIG_APP_FATFS is not set
+
+#
+# USB
+#
+CONFIG_APP_USB_HOST=y

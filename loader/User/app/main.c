@@ -810,6 +810,29 @@ int fw_upgrade_v2(uint32_t *pCurrentAppAddr)
  *****************************************************/
 extern char __vector_base;
 
+/* ==================== reset reason ==================== */
+/* boot already read+cleared RCC_CSR, so this should normally print "none":
+ * it proves no reset happened between boot and loader. If it does print a
+ * flag, loader (or boot handing over) restarted itself. */
+static void loader_report_reset_reason(void)
+{
+    uint32_t csr = RCC->CSR;
+    uint32_t iwdg_sw = FLASH->OPTCR & 0x1u;
+
+    __os_printf("[loader] RST:");
+    if (csr & RCC_CSR_LPWRRSTF) { __os_printf(" LPWR"); }
+    if (csr & RCC_CSR_WWDGRSTF) { __os_printf(" WWDG"); }
+    if (csr & RCC_CSR_WDGRSTF)  { __os_printf(" IWDG"); }
+    if (csr & RCC_CSR_SFTRSTF)  { __os_printf(" SW");   }
+    if (csr & RCC_CSR_PORRSTF)  { __os_printf(" POR");  }
+    if (csr & RCC_CSR_PADRSTF)  { __os_printf(" NRST"); }
+    if (csr & RCC_CSR_BORRSTF)  { __os_printf(" BOR");  }
+    if ((csr & 0xFE000000u) == 0u) { __os_printf(" none"); }
+    __os_printf(" | IWDG=%s\r\n", iwdg_sw ? "SW" : "HW");
+
+    RCC->CSR |= RCC_CSR_RMVF;
+}
+
 int main() 
 {
     uint8_t boot_count = 5;
@@ -829,6 +852,7 @@ int main()
     /* 初始化串口 */
     Debug_USART_Config();
     s_listen_stay = 1;
+    loader_report_reset_reason();
 
     /* RGB LED：OTA 时闪蓝，成功绿 / 失败红 */
     LED_GPIO_Config();

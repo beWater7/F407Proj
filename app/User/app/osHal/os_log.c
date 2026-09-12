@@ -55,6 +55,11 @@ void os_log(uint8_t mod, uint8_t level, const char *fmt, ...)
         return;
     }
 
+    /* 取打印锁：__print_buf__ 为全局共享缓冲，必须与 os_printf_api 串行 */
+    if (!os_print_buf_begin()) {
+        return;
+    }
+
     memset(__print_buf__, 0, LINELENTH);
     __print_buf_len__ = 0;
 

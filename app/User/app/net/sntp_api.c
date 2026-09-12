@@ -7,6 +7,7 @@
 
 #include "hal_rtc.h"
 #include "os_debug.h"
+#include "os_log.h"
 #include "log.h"
 #include "safe_utils.h"
 
@@ -134,7 +135,7 @@ void RTC_Set_From_Uptime(char *uptime)
     hal_rtc_time_t r;
     if(parse_uptime(uptime, &t) != 0)
     {
-        printf("uptime err format!\n");
+        LOGE(LOG_MOD_NET, "uptime err format!\n");
         return;
     }
 
@@ -147,8 +148,9 @@ void RTC_Set_From_Uptime(char *uptime)
     r.second = t.tm_sec;
     hal_rtc_set_time(&r);
 
-    os_printf("RTC to → %04d-%02d-%02d %02d:%02d:%02d\n",
-          t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
+    /* 时间同步结果:每次同步成功都打,默认等级下静默(debugLevel 4 可打开) */
+    LOGI(LOG_MOD_NET, "RTC to %04d-%02d-%02d %02d:%02d:%02d\n",
+         t.tm_year+1900, t.tm_mon+1, t.tm_mday, t.tm_hour, t.tm_min, t.tm_sec);
 
 }
 

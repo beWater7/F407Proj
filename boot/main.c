@@ -376,6 +376,32 @@ static int xmodem_receive_loader(uint8_t *dst, uint32_t *out_size)
     return 0;
 }
 
+/* ==================== reset reason ==================== */
+/* boot is the first code that runs after ANY reset, so reading RCC_CSR here
+ * tells us who reset the board last time. Read+clear so the next reset is
+ * not confused with this one.
+ * FLASH_OPTCR bit0 = IWDG mode: 1 = software (only app arms it),
+ *                              0 = hardware (armed at power-on, cannot be
+ *                                  disabled -> boot/loader hang also resets). */
+static void report_reset_reason(void)
+{
+    uint32_t csr = RCC->CSR;
+    uint32_t iwdg_sw = FLASH->OPTCR & 0x1u;
+
+    printf("[boot] RST:");
+    if (csr & RCC_CSR_LPWRRSTF) { printf(" LPWR"); }
+    if (csr & RCC_CSR_WWDGRSTF) { printf(" WWDG"); }
+    if (csr & RCC_CSR_WDGRSTF)  { printf(" IWDG"); }
+    if (csr & RCC_CSR_SFTRSTF)  { printf(" SW");   }
+    if (csr & RCC_CSR_PORRSTF)  { printf(" POR");  }
+    if (csr & RCC_CSR_PADRSTF)  { printf(" NRST"); }
+    if (csr & RCC_CSR_BORRSTF)  { printf(" BOR");  }
+    if ((csr & 0xFE000000u) == 0u) { printf(" none"); }
+    printf(" | IWDG=%s\n", iwdg_sw ? "SW" : "HW");
+
+    RCC->CSR |= RCC_CSR_RMVF;
+}
+
 /* ==================== main ==================== */
 int main(void)
 {
@@ -388,6 +414,7 @@ int main(void)
     LED_RGBOFF;
 
     printf("\n===== boot %s %s =====\n", __DATE__, __TIME__);
+    report_reset_reason();
 
     SPI_FLASH_Init();
     DelayMs(200);

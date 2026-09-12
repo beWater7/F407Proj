@@ -1,5 +1,6 @@
 #include "os_debug.h"
-#include "os_mutex.h"
+#include "os_mutex.h"   /* os_mutex_* / os_in_isr() / os_critical_* —— 不直接用 RTOS raw 接口 */
+#include "os_task.h"    /* os_scheduler_running() */
 #include "malloc.h"
 #include "hal_uart.h"
 #include "ustdio.h"
@@ -132,6 +133,65 @@ void print_redirect(__print_callback__ func, void *argc)
 }
 
 
+/* ==================== 打印串行化 ==================== */
+/* __print_buf__ 是所有打印(os_printf_api / os_log / os_debug)共用的全局缓冲。
+ * 原先出口处只有 hal_uart_flush()，但那只是"等串口发完"的 drain，没有互斥语义：
+ * 任务 A 还在 hal_uart_write() 里逐字节读缓冲时，任务 B 已经 memset 把它清零，
+ * 串口上就吐出半截字符串和零字节 —— 日志出现字符级交错，例如：
+ *   [2[2001][app] 001][app] rrecv: first ecv: first loop, apply loop, applypending...
+ * 这里用一把互斥锁把 "取缓冲 -> 渲染 -> 冲刷" 整段串行化。 */
+static os_mutex_t s_print_lock = NULL;
+static int        s_print_held = 0;   /* 本上下文是否真的持锁 */
+
+/* 进入渲染前调用。返回 0 表示本轮放弃打印，调用方必须直接返回。 */
+int os_print_buf_begin(void)
+{
+    int in_isr = os_in_isr();
+
+    if (s_print_lock == NULL) {
+        /* 调度器未启动(启动早期)只有一个上下文，无需串行化 */
+        if (!os_scheduler_running()) {
+            return 1;
+        }
+        /* 中断里不建锁：建锁要走堆分配，非 ISR 安全 */
+        if (in_isr) {
+            return 0;
+        }
+        /* 首次在任务上下文调用时补建锁(与 esp8266_mutex_ensure 同一范式)，
+         * 用临界区防止两个任务同时创建出两把锁 */
+        os_critical_enter();
+        if (s_print_lock == NULL) {
+            os_mutex_init(s_print_lock);
+        }
+        os_critical_exit();
+        if (s_print_lock == NULL) {
+            return 1;   /* 建锁失败不能把打印彻底堵死 */
+        }
+    }
+
+    if (in_isr) {
+        /* 中断上下文不能阻塞等锁，拿不到就丢弃本条：
+         * 丢一条日志远好过撕裂缓冲或死锁 */
+        if (!os_mutex_trylock(s_print_lock)) {
+            return 0;
+        }
+    } else {
+        os_mutex_lock(s_print_lock);
+    }
+
+    s_print_held = 1;
+    return 1;
+}
+
+/* 释放锁。与 os_print_buf_begin() 成对调用。 */
+void os_print_buf_release(void)
+{
+    if (s_print_held) {
+        s_print_held = 0;
+        os_mutex_unlock(s_print_lock);
+    }
+}
+
 /* 实现打印等级参数可缺省的设计, format前就不能带参数 */
 void os_printf_api( const char *format, ...)
 {
@@ -144,6 +204,10 @@ void os_printf_api( const char *format, ...)
     uint8 byJiffies[16] = {0};
 
     if(0 == __printf_enable__)
+        return;
+
+    /* 取打印锁：此后任何一条 return 都必须先 os_print_buf_release() */
+    if(!os_print_buf_begin())
         return;
 
     /* 将打印等级对应前缀和颜色转移字符写入打印缓冲区buff */
@@ -188,6 +252,8 @@ void os_printf_api( const char *format, ...)
     /* 打印级别判断, 低于默认级别的不打印(PrintLevel越小级别越高) */
     if(__color__ && byPrintLevel > __printf_level__)
     {
+        /* 已持锁，必须成对释放，否则这把锁再也回不来 */
+        os_print_buf_release();
         return;
     }
 
@@ -258,8 +324,12 @@ void os_print_buf_flush(void)
         hal_uart_write((uint8_t *)__print_buf__, byBuffLen);
     }
 
-    /* 等待串口传输完成, 避免乱码 */
+    /* 等到串口传输完成，本行日志才算真正写完。
+     * 注意：这只是 drain，本身不提供互斥；排他由 os_print_buf_begin() 的锁负责 */
     hal_uart_flush();
+
+    /* 与 os_print_buf_begin() 成对：两个调用方(os_printf_api / os_log)都经由此处出口 */
+    os_print_buf_release();
 }
 
 

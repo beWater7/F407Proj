@@ -16,9 +16,11 @@
 #include <errno.h>
 #include <libgen.h>
 #include <linux/limits.h>
+#include <signal.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/types.h>
 #include <time.h>
 #include <unistd.h>
 
@@ -1076,35 +1078,128 @@ static int flash_attempt(const xfer_ops_t *ops, uart_ctx_t *uctx, const char *de
     return 0;
 }
 
-/* 检测并提示其它同时持有同一串口的进程。
+/* ==================== 串口占用者发现 / 抢占 ==================== */
+
+#define HOLDER_COMM_LEN  64
+#define HOLDER_CMD_LEN   192
+
+typedef struct {
+    long  pid;
+    uid_t uid;                       /* real uid: 决定能否 kill(跨用户要 sudo) */
+    char  comm[HOLDER_COMM_LEN];     /* /proc/<pid>/comm: 进程名(内核截断 15 字符) */
+    char  cmd[HOLDER_CMD_LEN];       /* /proc/<pid>/cmdline: 完整命令行 */
+} holder_t;
+
+/* 读 /proc/<pid>/comm; 进程已退出时留空串 */
+static void holder_read_comm(long pid, char *out, size_t len)
+{
+    char path[64];
+    FILE *f;
+
+    out[0] = '\0';
+    snprintf(path, sizeof(path), "/proc/%ld/comm", pid);
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return;
+    }
+    if (fgets(out, (int)len, f) != NULL) {
+        out[strcspn(out, "\n")] = '\0';
+    } else {
+        out[0] = '\0';
+    }
+    fclose(f);
+}
+
+/* 读 /proc/<pid>/cmdline, 把 NUL 分隔的 argv 拼成空格分隔的一行。
+ * comm 只有 15 字节, 脚本常被截成 "python3"; 这里能看到真实脚本名和参数,
+ * 用户才能确认"要杀的确实是我的串口工具"。 */
+static void holder_read_cmdline(long pid, char *out, size_t len)
+{
+    char path[64];
+    FILE *f;
+    size_t n;
+    size_t i;
+
+    out[0] = '\0';
+    snprintf(path, sizeof(path), "/proc/%ld/cmdline", pid);
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return;
+    }
+    n = fread(out, 1, len - 1, f);
+    fclose(f);
+    out[n] = '\0';
+    if (n == 0) {
+        return;   /* 内核线程 / 僵尸: 无 cmdline */
+    }
+    for (i = 0; i < n; i++) {
+        unsigned char ch = (unsigned char)out[i];
+
+        /* NUL 分隔的 argv → 空格; 其它控制字符(换行/制表等)也压成空格。
+         * 否则 `python3 -c '<多行脚本>'` 这类 cmdline 会把提示撑成几十行。 */
+        if (ch == '\0' || ch < 0x20 || ch == 0x7f) {
+            out[i] = ' ';
+        }
+    }
+    while (n > 1 && out[n - 1] == ' ') {
+        out[--n] = '\0';
+    }
+}
+
+/* 读 /proc/<pid>/status 的 Uid 行(real uid) */
+static uid_t holder_read_uid(long pid)
+{
+    char path[64];
+    char line[256];
+    FILE *f;
+    uid_t uid = (uid_t)-1;
+
+    snprintf(path, sizeof(path), "/proc/%ld/status", pid);
+    f = fopen(path, "r");
+    if (f == NULL) {
+        return uid;
+    }
+    while (fgets(line, sizeof(line), f) != NULL) {
+        if (strncmp(line, "Uid:", 4) == 0) {
+            unsigned long v = 0;
+            if (sscanf(line + 4, "%lu", &v) == 1) {
+                uid = (uid_t)v;
+            }
+            break;
+        }
+    }
+    fclose(f);
+    return uid;
+}
+
+/* 扫 /proc/<pid>/fd, 收集除自己以外所有持有 dev 的进程。返回个数(0=无)。
  *
  * 为什么需要: Linux tty 默认允许并发 open, 只有当占用方也用 flock/TIOCEXCL
  * 时 uart_open 才会因 EBUSY 失败。minicom/serialTerm(旧版)/cat > /dev/ttyUSB0
  * 这类裸 open 的程序不参与锁协议, xfer 打开不会报错, 但两边会抢字节导致烧录乱码。
- * 这里在 open/flock 成功后扫 /proc/<pid>/fd, 找出其它指向同一设备节点的进程并提示。
- */
-static void warn_other_holders(const char *dev)
+ * 所以 open 成功后也要调一次, 把这类"无锁占用方"提示出来。 */
+static int collect_holders(const char *dev, holder_t *out, int max)
 {
     char real[PATH_MAX];
     char fddir[64];
     char link[PATH_MAX];
-    char buf[PATH_MAX];
+    char target[PATH_MAX];
     DIR *d;
     struct dirent *e;
     long self = (long)getpid();
+    int n = 0;
 
     if (realpath(dev, real) == NULL) {
-        return;   /* 设备不可达, open 阶段已报错 */
+        return 0;   /* 设备不可达, open 阶段已报错 */
     }
     d = opendir("/proc");
     if (d == NULL) {
-        return;
+        return 0;
     }
     while ((e = readdir(d)) != NULL) {
         long pid;
         DIR *dfd;
         struct dirent *fe;
-        char *tail;
         int hit = 0;
 
         if (e->d_name[0] < '0' || e->d_name[0] > '9') {
@@ -1117,54 +1212,165 @@ static void warn_other_holders(const char *dev)
         snprintf(fddir, sizeof(fddir), "/proc/%ld/fd", pid);
         dfd = opendir(fddir);
         if (dfd == NULL) {
-            continue;
+            continue;   /* 无权限或已退出 */
         }
         while ((fe = readdir(dfd)) != NULL) {
-            ssize_t n;
+            ssize_t rn;
+            char *tail;
 
             if (fe->d_name[0] == '.') {
                 continue;
             }
             snprintf(link, sizeof(link), "%s/%s", fddir, fe->d_name);
-            n = readlink(link, buf, sizeof(buf) - 1);
-            if (n <= 0) {
+            rn = readlink(link, target, sizeof(target) - 1);
+            if (rn <= 0) {
                 continue;
             }
-            buf[n] = '\0';
-            tail = strstr(buf, " (deleted)");
+            target[rn] = '\0';
+            tail = strstr(target, " (deleted)");
             if (tail != NULL) {
                 *tail = '\0';
             }
-            if (strcmp(buf, real) != 0) {
-                continue;
+            if (strcmp(target, real) == 0) {
+                hit = 1;
+                break;
             }
-            /* 命中: pid 持有该设备节点, 取进程名 */
-            snprintf(link, sizeof(link), "/proc/%ld/comm", pid);
-            {
-                FILE *f = fopen(link, "r");
-                if (f != NULL) {
-                    if (fgets(buf, sizeof(buf), f) != NULL) {
-                        buf[strcspn(buf, "\n")] = '\0';
-                    } else {
-                        buf[0] = '\0';
-                    }
-                    fclose(f);
-                } else {
-                    buf[0] = '\0';
-                }
-            }
-            fprintf(stderr,
-                    "WARN: pid %ld (%s) 也在使用 %s —— 若烧录异常, 请先关闭它再重试\n",
-                    pid, buf[0] != '\0' ? buf : "?", dev);
-            hit = 1;
-            break;
         }
         closedir(dfd);
-        if (hit) {
-            continue;   /* 已提示过该 pid, 继续查其它进程 */
+        if (!hit) {
+            continue;
         }
+        if (n >= max) {
+            break;      /* 已够, 防止写越界 */
+        }
+        out[n].pid = pid;
+        out[n].uid = holder_read_uid(pid);
+        holder_read_comm(pid, out[n].comm, sizeof(out[n].comm));
+        holder_read_cmdline(pid, out[n].cmd, sizeof(out[n].cmd));
+        n++;
     }
     closedir(d);
+    return n;
+}
+
+/* 无锁并发占用方(如未加锁的旧版 serialTerm)提示: 只警告, 不抢占。 */
+static void warn_other_holders(const char *dev)
+{
+    holder_t h[XFER_PREEMPT_MAX_HOLDERS];
+    int n;
+    int i;
+
+    n = collect_holders(dev, h, XFER_PREEMPT_MAX_HOLDERS);
+    for (i = 0; i < n; i++) {
+        fprintf(stderr,
+                "WARN: pid %ld (%s) 也在使用 %s —— 若烧录异常, 请先关闭它再重试\n",
+                h[i].pid, h[i].comm[0] != '\0' ? h[i].comm : "?", dev);
+    }
+}
+
+/* 轮询尝试真正打开端口, 直到成功(=锁已到手)或超时。 */
+static int wait_port_free(const xfer_ops_t *ops, void *ctx, const char *dev,
+                          int baud, int timeout_ms)
+{
+    int deadline = now_ms() + timeout_ms;
+
+    for (;;) {
+        if (ops->open(ctx, dev, baud) == 0) {
+            return 0;
+        }
+        if (now_ms() >= deadline) {
+            return -1;
+        }
+        usleep(100 * 1000);
+    }
+}
+
+/* 抢占被占用的串口: 列出占用者 → 征求同意 → SIGTERM/SIGKILL → 等释放 → 重开。
+ *
+ * 为什么要"杀"而不是"夺": Linux 没有任何接口能把别人手里的 tty fd 强行拿过来 ——
+ * SIGSTOP 不关 fd(锁仍被持有), pidfd_getfd 需要 ptrace 且原进程会继续读同一 fd,
+ * flock/TIOCEXCL 只在最后一个 fd 关闭时才释放。所以唯一可靠的办法是请占用方结束自己。
+ *
+ * 正因为它有破坏性, 默认必须交互确认; 只有显式 -y/--force 才静默执行,
+ * 且非 tty(脚本/CI)一律拒绝 —— 否则会静默杀掉用户的数据记录进程。
+ *
+ * 返回 0 = 已成功打开(ctx 可用); -1 = 放弃(未做破坏, 或杀不掉)。 */
+static int preempt_port(const xfer_ops_t *ops, void *ctx, const char *dev,
+                        int baud, int force)
+{
+    holder_t h[XFER_PREEMPT_MAX_HOLDERS];
+    int n;
+    int i;
+    int c;
+    int ans;
+
+    n = collect_holders(dev, h, XFER_PREEMPT_MAX_HOLDERS);
+    if (n == 0) {
+        fprintf(stderr,
+                "port busy but no holding process found in /proc\n"
+                "  (held by another user, or a stale lock?)\n"
+                "  try: sudo fuser -v %s\n", dev);
+        return -1;
+    }
+
+    fprintf(stderr, "\n%d process(es) hold %s:\n", n, dev);
+    for (i = 0; i < n; i++) {
+        fprintf(stderr, "  pid %-7ld uid %-6u %s\n",
+                h[i].pid, (unsigned)h[i].uid,
+                h[i].comm[0] != '\0' ? h[i].comm : "?");
+        if (h[i].cmd[0] != '\0') {
+            fprintf(stderr, "          %s\n", h[i].cmd);
+        }
+    }
+
+    if (force) {
+        fprintf(stderr, "\n--force: killing the above\n");
+    } else if (!isatty(STDIN_FILENO)) {
+        fprintf(stderr,
+                "\nstdin is not a tty — refusing to kill without confirmation\n"
+                "  re-run with -y/--force to preempt\n");
+        return -1;
+    } else {
+        fprintf(stderr, "\nKill the above and take over %s? [y/N] ", dev);
+        fflush(stderr);
+        ans = getchar();
+        while ((c = getchar()) != '\n' && c != EOF) {
+            /* 吃掉本行剩余字符 */
+        }
+        if (ans != 'y' && ans != 'Y') {
+            fprintf(stderr, "aborted — port left untouched\n");
+            return -1;
+        }
+    }
+
+    /* 第一轮: SIGTERM。给占用方收尾机会(比直接 KILL 干净), 然后等它关闭串口。 */
+    for (i = 0; i < n; i++) {
+        if (kill((pid_t)h[i].pid, SIGTERM) != 0 && errno == EPERM) {
+            fprintf(stderr, "  pid %ld: permission denied — need sudo\n", h[i].pid);
+        }
+        /* ESRCH = 已自行退出, 视为成功, 无需处理 */
+    }
+    if (wait_port_free(ops, ctx, dev, baud, XFER_PREEMPT_TERM_WAIT_MS) == 0) {
+        return 0;
+    }
+
+    /* 第二轮: 还在赖着 → SIGKILL(不可被忽略或捕获) */
+    fprintf(stderr, "still busy after SIGTERM — escalating to SIGKILL\n");
+    for (i = 0; i < n; i++) {
+        if (kill((pid_t)h[i].pid, SIGKILL) != 0 && errno == EPERM) {
+            fprintf(stderr, "  pid %ld: permission denied — need sudo\n", h[i].pid);
+        }
+    }
+    if (wait_port_free(ops, ctx, dev, baud, XFER_PREEMPT_KILL_WAIT_MS) == 0) {
+        return 0;
+    }
+
+    fprintf(stderr,
+            "port still busy after SIGKILL — giving up\n"
+            "  if nothing is listed above, the tty is still in exclusive mode\n"
+            "  (driver not released); try unplug/replug the adapter, or:\n"
+            "  sudo fuser -v %s\n", dev);
+    return -1;
 }
 
 static void usage(const char *argv0)
@@ -1184,6 +1390,9 @@ static void usage(const char *argv0)
             "  --no-reset       do not pulse DTR/RTS (board already in loader)\n"
             "  --no-cmd         skip 'upgrade' (loader already waiting 'C')\n"
             "  --retries N      auto retry attempts (default 3)\n"
+            "  -y, --force      if the port is busy, kill the process(es) holding it\n"
+            "                   without asking (default: list them, then ask y/N;\n"
+            "                   non-tty stdin always refuses without this flag)\n"
             "  -v, --verbose    echo board serial output (default: progress only)\n"
             "  -h, --help\n"
             "\n"
@@ -1202,6 +1411,7 @@ int main(int argc, char **argv)
     int send_cmd = 1;
     int do_reset = 1;
     int retries = XFER_DEFAULT_RETRIES;
+    int force = 0;           /* -y/--force: 端口忙时直接抢占, 不询问 */
     int attempt;
     int i;
     int got_c;
@@ -1249,6 +1459,10 @@ int main(int argc, char **argv)
             if (retries < 0) {
                 retries = 0;
             }
+            continue;
+        }
+        if (!strcmp(argv[i], "-y") || !strcmp(argv[i], "--force")) {
+            force = 1;
             continue;
         }
         if (argv[i][0] == '-') {
@@ -1337,13 +1551,19 @@ int main(int argc, char **argv)
     name[sizeof(name) - 1] = '\0';
 
     if (ops->open(&uctx, dev, baud) != 0) {
-        fprintf(stderr, "open %s: %s\n", dev, strerror(errno));
-        if (errno == EBUSY) {
-            fprintf(stderr, "port busy — close serialTerm.sh / other flash_upg first\n");
-            warn_other_holders(dev);   /* 列出占用该串口的进程 */
+        int oerr = errno;   /* fprintf/strerror 都可能改写 errno, 先存下来 */
+
+        fprintf(stderr, "open %s: %s\n", dev, strerror(oerr));
+        if (oerr != EBUSY) {
+            free(filebuf);
+            return 1;
         }
-        free(filebuf);
-        return 1;
+        fprintf(stderr, "port busy — close serialTerm.sh / other flash_upg first\n");
+        /* 抢占: 列出占用者 → 征求同意(或 --force) → SIGTERM/SIGKILL → 重开 */
+        if (preempt_port(ops, &uctx, dev, baud, force) != 0) {
+            free(filebuf);
+            return 1;
+        }
     }
     fprintf(stderr, "opened %s @ %d (exclusive)\n", dev, baud);
     warn_other_holders(dev);   /* 无锁并发占用方(如 serialTerm)在此给出提示 */
