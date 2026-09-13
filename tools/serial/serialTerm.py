@@ -1,6 +1,7 @@
 import ctypes
+import json
 import tkinter as tk
-from tkinter import ttk, scrolledtext, messagebox, filedialog
+from tkinter import ttk, scrolledtext, messagebox, filedialog, colorchooser
 import serial
 import serial.tools.list_ports
 import threading
@@ -260,15 +261,37 @@ class YmodemSender:
 
 #sys.stdout.reconfigure(encoding='gb2312')
 class SerialMonitor(tk.Tk):
+    # 串口输出区背景预设。以深色护眼为主，最后一个浅色用于白天/投影
+    DEFAULT_BG = "#1e1e1e"
+    BG_PRESETS = {
+        "石墨 #1e1e1e": "#1e1e1e",
+        "纯黑 #000000": "#000000",
+        "深灰 #2b2b2b": "#2b2b2b",
+        "深蓝 #0d1b2a": "#0d1b2a",
+        "墨绿 #0f1f14": "#0f1f14",
+        "暖棕 #241c16": "#241c16",
+        "浅灰 #f0f0f0": "#f0f0f0",
+    }
+
+    # ---- 配置持久化：背景/透明度/窗口尺寸/串口等下次启动自动恢复 ----
+    CONFIG_DIR = os.path.join(os.path.expanduser("~"), ".config", "serialTerm")
+    CONFIG_PATH = os.path.join(CONFIG_DIR, "config.json")
+
     def __init__(self):
         global serial_stop
         serial_stop = 'reset'
         super().__init__()
         self.title("串口监控器（带系统时间戳 + ANSI彩色 + 野火初始化）")
-        self.geometry("1400x1200")
         self.configure(bg="#2d2d2d")
+        # 窗口尺寸不在这里写死：控件建完后由 _fit_to_content() 按实际内容算。
+        # (旧代码写死 1400x1200，在本机 tk scaling≈2.67 的 HiDPI 下，
+        #  工具栏一行需要 ~2200px，右侧「复位」「展示时间」会被窗口裁掉)
+        # 上次保存的配置(背景/透明度/尺寸/串口/波特率等)
+        self.cfg = self._load_config()
+        # 控件全部就绪前不要回写配置(避免把半初始化状态存盘)
+        self._ui_ready = False
         self.paused = False
-        self.timeStamp = False
+        self.timeStamp = bool(self.cfg.get("timestamp", False))
         """
         # 默认缩放
         self.scale = 1.5
@@ -291,7 +314,7 @@ class SerialMonitor(tk.Tk):
         self.reader_paused = False  # YMODEM 期间暂停读线程，避免抢 ACK/C
         self._ymodem_busy = False
         # 打开串口时是否用 DTR/RTS 脉冲复位板子（默认关：关开串口不再误复位）
-        self.reset_on_open = tk.BooleanVar(value=False)
+        self.reset_on_open = tk.BooleanVar(value=bool(self.cfg.get("reset_on_open", False)))
 
         # 111    
         #self.prompt_prefix = "[mcu@board]#"
@@ -301,6 +324,8 @@ class SerialMonitor(tk.Tk):
         self.prompt_prefix_list = ["STM32F407 >", "BOOT#", "@STM32:"]
 
         self.create_widgets()
+        # 控件建好后才知道工具栏真实宽度，这里再定窗口尺寸
+        self._fit_to_content()
 
         self.txt_output.bind("<Key>", self.on_key)
         self.txt_output.bind("<Return>", self.on_enter)
@@ -313,6 +338,9 @@ class SerialMonitor(tk.Tk):
 
         self.protocol("WM_DELETE_WINDOW", self.on_close)
         #self.txt_output.delete(line_start, line_end)
+
+        # 控件与尺寸都就绪，之后的外观改动可以安全回写配置了
+        self._ui_ready = True
 
     def _get_editable_start(self, line_no=None):
         """返回指定行提示符之后的可编辑起始列（默认当前光标行）"""
@@ -558,66 +586,123 @@ class SerialMonitor(tk.Tk):
         style.configure("TEntry", font=("Consolas", 11))
         style.configure("TCombobox", font=("Consolas", 11))
 
-        frm_top = ttk.Frame(self)
-        frm_top.pack(fill='x', padx=10, pady=8)
+        # 按钮内边距收窄：HiDPI 下默认 padding 被缩放整除后会虚胖
+        # (每个按钮曾达 214px，11 个排一行要 2191px，窗口被迫很宽)
+        style.configure("TButton", font=("Consolas", 11), padding=(2, 2))
+        # LabelFrame 深色描边：分组框要和暗色主题协调
+        style.configure("TLabelframe", background="#2d2d2d",
+                        bordercolor="#3c3c3c", relief="solid", borderwidth=1)
+        style.configure("TLabelframe.Label", background="#2d2d2d",
+                        foreground="#8ab4f8", font=("Consolas", 11))
 
-        ttk.Label(frm_top, text="串口:").pack(side='left')
-        self.cb_ports = ttk.Combobox(frm_top, width=12, values=self.get_ports(), state='readonly')
-        self.cb_ports.pack(side='left', padx=6)
-        self.btn_refresh = ttk.Button(frm_top, text="刷新", command=self.refresh_ports)
-        self.btn_refresh.pack(side='left')
+        # 统一网格内边距：所有控件用同一组，间距才规整
+        P = {'padx': 4, 'pady': 3}
 
-        ttk.Label(frm_top, text="波特率:").pack(side='left', padx=(20, 0))
-        self.cb_baud = ttk.Combobox(frm_top, width=12, values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"], state='readonly')
-        self.cb_baud.set("115200")
-        self.cb_baud.pack(side='left', padx=6)
+        # ================= 工具栏：按功能分组 + grid 对齐 =================
+        # 用 grid 而不是 pack：同一列的控件宽度自动对齐（sticky='ew'），
+        # 按钮不会各自长短不一。分组用 LabelFrame，一眼看清归属。
+        frm_bar = ttk.Frame(self)
+        frm_bar.pack(fill='x', padx=10, pady=(8, 2))
 
-        self.btn_start = ttk.Button(frm_top, text="打开串口", command=self.start)
-        self.btn_start.pack(side='left', padx=(30, 6))
-        self.btn_stop = ttk.Button(frm_top, text="关闭串口", command=self.stop, state='disabled')
-        self.btn_stop.pack(side='left', padx=6)
+        # ---- 分组 1：连接 ----
+        lf_conn = ttk.LabelFrame(frm_bar, text=" 连接 ")
+        lf_conn.grid(row=0, column=0, sticky='new', padx=(0, 6))
+        lf_conn.columnconfigure(1, weight=1)
 
+        ttk.Label(lf_conn, text="串口:").grid(row=0, column=0, sticky='w', **P)
+        self.cb_ports = ttk.Combobox(lf_conn, width=12, values=self.get_ports(), state='readonly')
+        self.cb_ports.grid(row=0, column=1, sticky='ew', **P)
+        if self.cfg.get("port"):            # 恢复上次选的串口
+            self.cb_ports.set(self.cfg["port"])
+        self.btn_refresh = ttk.Button(lf_conn, text="刷新", command=self.refresh_ports)
+        self.btn_refresh.grid(row=0, column=2, sticky='ew', **P)
         # 勾选后：打开串口时故意脉冲 DTR/RTS 复位，便于抓启动日志
         self.chk_reset_on_open = ttk.Checkbutton(
-            frm_top, text="打开时复位", variable=self.reset_on_open)
-        self.chk_reset_on_open.pack(side='left', padx=(8, 0))
-        
-        #新增暂停模式
-        self.btn_pause = ttk.Button(frm_top, text="暂停显示", command=self.toggle_pause, state='disabled')
-        self.btn_pause.pack(side='left', padx=(8, 0))
-        
-        #新增复位模式（不关串口，脉冲复位以便观察启动日志）
-        self.btn_reset = ttk.Button(frm_top, width=12, text="复位", command=self.reset, state='disabled')
-        self.btn_reset.pack(side='left', padx=(6, 30))
+            lf_conn, text="打开时复位", variable=self.reset_on_open)
+        self.chk_reset_on_open.grid(row=0, column=3, sticky='w', **P)
 
+        ttk.Label(lf_conn, text="波特率:").grid(row=1, column=0, sticky='w', **P)
+        self.cb_baud = ttk.Combobox(lf_conn, width=10, values=["9600", "19200", "38400", "57600", "115200", "230400", "460800", "921600"], state='readonly')
+        self.cb_baud.grid(row=1, column=1, sticky='ew', **P)
+        self.cb_baud.set(str(self.cfg.get("baud") or "115200"))   # 恢复上次波特率
+        self.btn_start = ttk.Button(lf_conn, text="打开串口", command=self.start)
+        self.btn_start.grid(row=1, column=2, sticky='ew', **P)
+        self.btn_stop = ttk.Button(lf_conn, text="关闭串口", command=self.stop, state='disabled')
+        self.btn_stop.grid(row=1, column=3, sticky='ew', **P)
+
+        # ---- 分组 2：操作 ----
+        lf_oper = ttk.LabelFrame(frm_bar, text=" 操作 ")
+        lf_oper.grid(row=0, column=1, sticky='new')
+
+        #新增暂停模式
+        self.btn_pause = ttk.Button(lf_oper, text="暂停显示", command=self.toggle_pause, state='disabled')
+        self.btn_pause.grid(row=0, column=0, sticky='ew', **P)
+        #新增复位模式（不关串口，脉冲复位以便观察启动日志）
+        self.btn_reset = ttk.Button(lf_oper, text="复位", command=self.reset, state='disabled')
+        self.btn_reset.grid(row=0, column=1, sticky='ew', **P)
         #系统时间戳
-        self.btn_sysTime = ttk.Button(frm_top, text="展示时间", command=self.systemTime, state='disabled')
-        self.btn_sysTime.pack(side='left')
-        
+        self.btn_sysTime = ttk.Button(lf_oper, text="展示时间", command=self.systemTime, state='disabled')
+        self.btn_sysTime.grid(row=0, column=2, sticky='ew', **P)
+
+        # ---- 分组 3：外观（背景色 / 透明度）----
+        lf_look = ttk.LabelFrame(frm_bar, text=" 外观 ")
+        lf_look.grid(row=1, column=0, columnspan=2, sticky='ew', pady=(6, 0))
+        # 只在尾部留一个"吸收列"：多余宽度都被它吃掉，
+        # 控件保持自然尺寸，不会被 columnconfigure(1, weight=1) 拉成超宽下拉框
+        lf_look.columnconfigure(4, weight=1)
+
+        self._bg_color = self.DEFAULT_BG
+
+        ttk.Label(lf_look, text="背景:").grid(row=0, column=0, sticky='w', **P)
+        self.bg_choice = tk.StringVar(value="石墨 #1e1e1e")
+        self.cb_bg = ttk.Combobox(lf_look, width=14, state='readonly',
+                                  textvariable=self.bg_choice,
+                                  values=list(self.BG_PRESETS.keys()))
+        self.cb_bg.grid(row=0, column=1, sticky='w', **P)
+        self.cb_bg.bind('<<ComboboxSelected>>', self._on_bg_preset)
+
+        self.btn_pick = ttk.Button(lf_look, text="取色…", command=self._pick_bg_color)
+        self.btn_pick.grid(row=0, column=2, sticky='w', **P)
+        self.btn_look_reset = ttk.Button(lf_look, text="重置外观", command=self._reset_look)
+        self.btn_look_reset.grid(row=0, column=3, sticky='w', **P)
+
+        ttk.Label(lf_look, text="透明度:").grid(row=1, column=0, sticky='w', **P)
+        self.scale_alpha = ttk.Scale(lf_look, from_=30, to=100, orient='horizontal',
+                                     length=200, command=self._on_alpha_change)
+        self.scale_alpha.grid(row=1, column=1, sticky='w', **P)
+        # 数值标签：等宽 + 右对齐，滑动时数字不跳位
+        self.lbl_alpha_val = ttk.Label(lf_look, text="100%", width=5, anchor='w')
+        self.lbl_alpha_val.grid(row=1, column=2, sticky='w', **P)
+        self.scale_alpha.set(100)   # 必须在 lbl_alpha_val 之后
+
+        # ================= 日志路径：独占一行，保证路径完整可见 =================
+        # 之前和 3 个按钮挤在同一行，输入框只剩 ~300px，路径被截断
         frm_log = ttk.Frame(self)
-        frm_log.pack(fill='x', padx=10, pady=5)
-        ttk.Label(frm_log, text="日志保存路径:").pack(side='left')
-        # 默认保存路径：环境变量 SERIAL_LOG_DIR，否则 ~/gitProj/log
-        _default_log = os.environ.get(
-            "SERIAL_LOG_DIR",
-            os.path.join(os.path.expanduser("~"), "gitProj", "log"),
-        )
+        frm_log.pack(fill='x', padx=10, pady=(6, 2))
+        frm_log.columnconfigure(1, weight=1)   # 输入框吃掉剩余全部宽度
+
+        # 标签用简写"日志:"，把宽度让给输入框 —— 路径才显示得全
+        ttk.Label(frm_log, text="日志:").grid(row=0, column=0, sticky='w', padx=(0, 4))
+        # 默认保存路径优先级：上次配置 > 环境变量 SERIAL_LOG_DIR > ~/gitProj/log
+        _default_log = (self.cfg.get("log_path")
+                        or os.environ.get("SERIAL_LOG_DIR")
+                        or os.path.join(os.path.expanduser("~"), "gitProj", "log"))
         try:
             os.makedirs(_default_log, exist_ok=True)
         except OSError:
             pass
         self.log_path_var = tk.StringVar(value=_default_log)
         self.ent_log_path = ttk.Entry(frm_log, textvariable=self.log_path_var)
-        self.ent_log_path.pack(side='left', fill='x', expand=True, padx=6)
-        self.btn_browse = ttk.Button(frm_log, text="选择目录", command=self.browse_folder)
-        self.btn_browse.pack(side='left', padx=(0,5))
+        self.ent_log_path.grid(row=0, column=1, sticky='ew', padx=4)
+        self.btn_browse = ttk.Button(frm_log, text="浏览", command=self.browse_folder)
+        self.btn_browse.grid(row=0, column=2, padx=4)
 
         # 新增：YMODEM上传按钮
         self.btn_ymodem = ttk.Button(frm_log, text="YMODEM上传", command=self.send_file_via_ymodem)
-        self.btn_ymodem.pack(side='left')
+        self.btn_ymodem.grid(row=0, column=3, padx=(4, 0))
 
         #设置串口输出数据格式，字体:Lucida Console \ Consolas \ Courier New，大小
-        self.txt_output = scrolledtext.ScrolledText(self, font=("Consolas", 10), bg="#1e1e1e", fg="#f0f0f0", insertbackground="white")
+        self.txt_output = scrolledtext.ScrolledText(self, font=("Consolas", 10), bg=self.DEFAULT_BG, fg="#f0f0f0", insertbackground="white")
         self.txt_output.pack(fill='both', expand=True, padx=10, pady=10)
         
         # 默认字体--白色        
@@ -631,6 +716,9 @@ class SerialMonitor(tk.Tk):
         self.txt_output.tag_config('magenta', foreground='#c586c0')
         self.txt_output.tag_config('cyan', foreground='#4ec9b0')
         self.txt_output.tag_config('bold', font=("Consolas", 12, "bold"))
+
+        # 恢复上次保存的外观（背景色 + 透明度）；无配置则用默认
+        self._restore_look()
 
         # 右键菜单
         self.context_menu = tk.Menu(self.txt_output, tearoff=0)
@@ -657,6 +745,204 @@ class SerialMonitor(tk.Tk):
 
         self.btn_send = ttk.Button(frm_input, text="发送", command=self.send_command)
         self.btn_send.pack(side='left', padx=6)
+
+    # 窗口目标宽高比(宽:高)。终端类窗口横向略宽更协调；
+    # 高度还会被"内容最小高度"和屏幕可用高度夹住。
+    TARGET_ASPECT = 1.25
+
+    def _fit_to_content(self, min_w=900, min_h=800):
+        """按控件实际需要的最小尺寸设置窗口，保证工具栏按钮全部可见。
+
+        宽度：必须由工具栏内容决定，写死会把右侧按钮裁掉。
+              本机 tk scaling≈2.67(HiDPI) 下工具栏一行实测需要 ~2200px，
+              旧代码写死 1400 导致「复位」「展示时间」点不到。
+
+        高度：由宽度推出目标宽高比(TARGET_ASPECT)，这样窗口比例始终协调。
+              若改回"按屏幕高度百分比"，宽度收窄后会变成竖长条
+              (实测 1494x1632 = 0.92:1，反而不协调)。
+        """
+        self.update_idletasks()
+        need_w = self.winfo_reqwidth()
+        need_h = self.winfo_reqheight()   # 内容最小高度(含 Text 默认 24 行)
+        scr_w = self.winfo_screenwidth()
+        scr_h = self.winfo_screenheight()
+
+        # 屏幕可用范围：留出窗口边框与任务栏的余地
+        avail_w = max(min_w, scr_w - 60)
+        avail_h = max(min_h, scr_h - 120)
+
+        # 宽度：内容需要多少给多少，夹到屏幕内
+        w = max(min_w, min(need_w, avail_w))
+
+        # 高度：按目标宽高比由宽度推出，但不小于内容最小高度、不超过屏幕
+        target_h = int(w / self.TARGET_ASPECT)
+        h = max(min_h, min(max(need_h, target_h), avail_h))
+
+        # 上次保存的窗口尺寸优先，但仍夹在合法范围内：
+        # 宽度不得小于内容最小宽度(否则按钮被裁)，高度不得小于 min_h
+        saved = self.cfg.get("geometry")
+        if isinstance(saved, str):
+            m = re.match(r'^(\d+)x(\d+)', saved)
+            if m:
+                w = max(min_w, min(max(w, int(m.group(1))), avail_w))
+                h = max(min_h, min(max(h, int(m.group(2))), avail_h))
+
+        self.geometry(f"{w}x{h}")
+        # 最小宽度同 w：往回拖也不能窄到把按钮裁掉；高度允许自由缩小
+        self.minsize(w, min_h)
+
+    # ==================== 配置持久化 ====================
+    def _load_config(self):
+        """读取上次保存的配置；文件缺失/损坏都退回空配置，不影响启动。"""
+        try:
+            with open(self.CONFIG_PATH, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            return data if isinstance(data, dict) else {}
+        except (OSError, ValueError):
+            return {}
+
+    def _save_config(self):
+        """把当前外观/串口/尺寸写入配置文件。
+
+        写入走"临时文件 + os.replace"：即使写到一半断电/被杀，
+        也不会留下半截 JSON 把下次启动弄坏。
+        """
+        if not getattr(self, '_ui_ready', False):
+            return
+        cfg = dict(getattr(self, 'cfg', {}))   # 保留未知键，向前兼容
+        cfg.update({
+            "geometry": self.geometry(),
+            "bg": getattr(self, '_bg_color', self.DEFAULT_BG),
+            "alpha": int(getattr(self, '_alpha', 100)),
+            "log_path": self.log_path_var.get(),
+            "baud": self.cb_baud.get(),
+            "port": self.cb_ports.get(),
+            "reset_on_open": bool(self.reset_on_open.get()),
+            "timestamp": bool(self.timeStamp),
+        })
+        try:
+            os.makedirs(self.CONFIG_DIR, exist_ok=True)
+            tmp = self.CONFIG_PATH + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                json.dump(cfg, f, ensure_ascii=False, indent=2)
+            os.replace(tmp, self.CONFIG_PATH)
+        except OSError:
+            pass   # 配置存不上不该影响使用
+
+    # ==================== 外观：背景色 / 透明度 ====================
+    @staticmethod
+    def _text_fg_for_bg(bg):
+        """按背景亮度选前景色：浅底用深字，深底用浅字。
+        用 ITU-R BT.601 感知亮度，比简单平均更符合人眼。"""
+        try:
+            r = int(bg[1:3], 16)
+            g = int(bg[3:5], 16)
+            b = int(bg[5:7], 16)
+        except (ValueError, IndexError):
+            return "#f0f0f0"
+        lum = (0.299 * r + 0.587 * g + 0.114 * b) / 255.0
+        return "#101010" if lum > 0.5 else "#f0f0f0"
+
+    def _apply_bg_color(self, bg):
+        """设置串口输出区背景色，并联动文字色，保证可读。"""
+        fg = self._text_fg_for_bg(bg)
+        self.txt_output.configure(bg=bg, fg=fg, insertbackground=fg)
+        # 'reset' 是默认文字 tag，必须跟着改，否则日志会沿用旧前景色看不清
+        self.txt_output.tag_config('reset', foreground=fg)
+        self._bg_color = bg
+        self._save_config()   # 立即落盘，下次启动自动恢复
+
+    def _on_bg_preset(self, _evt=None):
+        hexc = self.BG_PRESETS.get(self.bg_choice.get())
+        if hexc:
+            self._apply_bg_color(hexc)
+
+    def _pick_bg_color(self):
+        """系统取色器：任意背景色"""
+        _rgb, hexc = colorchooser.askcolor(
+            color=getattr(self, '_bg_color', self.DEFAULT_BG),
+            title="选择串口输出区背景色")
+        if hexc:
+            self.bg_choice.set("自定义 %s" % hexc)
+            self._apply_bg_color(hexc)
+
+    def _on_alpha_change(self, val):
+        """整窗透明度。
+
+        说明：Tk 只有“整窗 alpha”，没有逐控件透明度 —— 所以调这个会连
+        按钮、边框一起变透明，文字对比度也会下降。看日志建议 >=85%。
+        """
+        a = float(val) / 100.0
+        # 记录"实际应用的"透明度：保存配置时以它为准。
+        # (不能读 scale_alpha.get() —— 手动调用回调时滑块值可能尚未更新，
+        #  会导致存盘数字和界面显示不一致)
+        self._alpha = int(round(float(val)))
+        try:
+            self.attributes('-alpha', a)
+        except tk.TclError:
+            # 无合成器的窗口管理器不支持，只提示一次
+            if getattr(self, '_alpha_ok', None) is not False:
+                self._alpha_ok = False
+                self.print_text("[系统] 当前窗口管理器不支持透明度，已忽略\n", 'yellow')
+            return
+        if hasattr(self, 'lbl_alpha_val'):
+            # Tk Scale 回调传的是字符串(如 "100.0")，不能直接 int()
+            self.lbl_alpha_val.config(text="%d%%" % int(float(val)))
+        self._save_config()
+
+    def _reset_look(self):
+        """恢复默认外观"""
+        self.bg_choice.set("石墨 #1e1e1e")
+        self._apply_bg_color(self.DEFAULT_BG)
+        self.scale_alpha.set(100)
+        self._on_alpha_change(100)
+        self._save_config()
+
+    def _restore_look(self):
+        """按配置恢复背景色与透明度（控件的初值设置）。
+
+        放在所有控件建好之后调用：_apply_bg_color 需要 txt_output 已存在，
+        scale_alpha.set() 会触发 _on_alpha_change 回调(需 lbl_alpha_val)。
+        """
+        bg = self.cfg.get("bg")
+        if not isinstance(bg, str) or not re.fullmatch(r'#[0-9a-fA-F]{6}', bg):
+            bg = self.DEFAULT_BG
+        # 回填下拉框显示：预设名或"自定义 #xxxxxx"
+        preset = next((k for k, v in self.BG_PRESETS.items()
+                       if v.lower() == bg.lower()), None)
+        self.bg_choice.set(preset or ("自定义 %s" % bg))
+        self._apply_bg_color(bg)
+
+        try:
+            alpha = int(self.cfg.get("alpha", 100))
+        except (TypeError, ValueError):
+            alpha = 100
+        alpha = max(30, min(100, alpha))
+        self.scale_alpha.set(alpha)
+        self._on_alpha_change(alpha)   # set() 不一定触发回调，这里显式应用一次
+
+        # X11 下对"尚未映射"的窗口设置 -alpha 会被静默丢弃(不报错、读回仍是 1.0)，
+        # 而这里是 __init__ 阶段窗口还没显示，所以恢复的透明度会丢失。
+        # 记下来，等窗口 Map 之后再真正应用一次。
+        self._pending_alpha = alpha
+        self.bind('<Map>', self._apply_pending_alpha, add='+')
+
+    def _apply_pending_alpha(self, _evt=None):
+        """窗口映射后真正应用透明度（见 _restore_look 的说明）。"""
+        a = getattr(self, '_pending_alpha', None)
+        if a is None:
+            return
+        self._pending_alpha = None
+        self._on_alpha_change(a)
+        # 有些窗口管理器没有合成器：设置不报错、也不生效。
+        # 实测一次，避免用户以为"配了没存住"。
+        if a < 100:
+            try:
+                if abs(self.attributes('-alpha') - a / 100.0) > 0.02:
+                    self.print_text(
+                        "[系统] 当前窗口管理器不支持透明效果，已忽略\n", 'yellow')
+            except tk.TclError:
+                pass
 
     def send_file_via_ymodem(self):
         if not self.serial_port or not self.serial_port.is_open:
@@ -745,6 +1031,7 @@ class SerialMonitor(tk.Tk):
         folder = filedialog.askdirectory()
         if folder:
             self.log_path_var.set(folder)
+            self._save_config()
     def _pulse_mcu_reset(self, ser=None):
         """通过 DTR/RTS 脉冲让板子复位（CH340/野火常见接法）。串口保持打开，可抓启动日志。"""
         ser = ser or self.serial_port
@@ -877,6 +1164,8 @@ class SerialMonitor(tk.Tk):
         self.reader_thread_running = True  # 避免多次读线程
         self.btn_start.config(state='disabled')
         self.btn_stop.config(state='normal')
+        # 记录本次成功使用的串口/波特率，下次启动自动预选
+        self._save_config()
         tip = "（打开时复位：开）" if self.reset_on_open.get() else "（打开时复位：关，不关串口也能用「复位」抓启动日志）"
         self.print_text(f"[系统] 串口 {port} 已打开，波特率 {baud} {tip}\n", 'green')
         self.txt_output.focus_set()
@@ -1021,6 +1310,7 @@ class SerialMonitor(tk.Tk):
             self.btn_sysTime.config(text="不展示时间")
         else:
             self.btn_sysTime.config(text="展示时间")
+        self._save_config()
     def feed_ansi(self, text, timestamp=None):
         """跨包拼接半截 ESC[...m，避免露出 [1;33m / [1;31m。
         timestamp 在拼接 CSI 之后再加，避免把时间戳插进 ESC 与 [ 中间。"""
@@ -1260,6 +1550,7 @@ class SerialMonitor(tk.Tk):
         self.txt_output.see(tk.END)
 
     def on_close(self):
+        self._save_config()
         self.stop()
         self.destroy()
 
